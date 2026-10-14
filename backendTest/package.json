@@ -1,0 +1,21 @@
+{
+  "name": "zhibang-backend-test",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "jest --runInBand",
+    "test:unit": "jest src/unit --runInBand",
+    "test:integration": "jest src/integration --runInBand --detectOpenHandles --forceExit",
+    "smoke": "node smoke/smoke.mjs"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.11.0",
+    "@types/supertest": "^6.0.2",
+    "jest": "^29.7.0",
+    "jest-mock-extended": "^3.0.5",
+    "supertest": "^7.0.0",
+    "ts-jest": "^29.1.2",
+    "typescript": "^5.3.3"
+  }
+}

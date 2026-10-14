@@ -1,0 +1,10 @@
+# 14b 占位文件（2026-09-23 加）
+# backend/src/templates/ 目录存在的意义：
+#   - nest-cli.json 的 assets 配置指向 templates/**/*
+#   - nest build 会把这个目录里的所有非 TS 文件（PDF/Excel/email/html 模板等）
+#     自动拷贝到 backend/dist/templates/，避免运行时找不到模板
+# 目前项目内没有使用任何模板文件，这个目录是空的，仅 .gitkeep 占位。
+# 未来如需新增模板：
+#   - 把文件放到 backend/src/templates/xxx/ 下
+#   - 代码里读 join(__dirname, '..', 'templates', 'xxx', 'file.pdf')
+#   - 即便 nest build 重新打包也能找到。

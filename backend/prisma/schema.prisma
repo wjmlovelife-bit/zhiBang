@@ -1,0 +1,842 @@
+// 智邦管理系统 - Prisma Schema (v2 + v3)
+// 客户管理 v2 + 项目(商机)管理 v3 + 跟进 + 附件 + 继承
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =================== 基础: 用户/角色/部门/菜单/字典 ===================
+
+model SysUser {
+  id                   Int                   @id @default(autoincrement())
+  username             String                @unique @db.VarChar(50)
+  password             String                @db.VarChar(200)
+  name                 String                @db.VarChar(50)
+  phone                String?               @db.VarChar(30)
+  email                String?               @db.VarChar(100)
+  deptId               Int?
+  dept                 SysDept?              @relation(fields: [deptId], references: [id])
+  isAdmin              Boolean               @default(false)
+  // 是否刚被管理员重置密码：true 时登录后弹一次"密码已被管理员重置"提示，用户关闭后调 /auth/clear-password-flag 置 false
+  mustResetPassword    Boolean               @default(false)
+  userMenus            SysUserMenu[]
+  userOperations       SysUserOperation[]
+  weeklySchedules      CrmWeeklySchedule[]   @relation("CrmWeeklyScheduleOwner")
+  salesSchedules       CrmSalesSchedule[]    @relation("CrmSalesScheduleOwner")
+  isActive             Boolean               @default(true)
+  // 权限版本号：密码重置/角色变更/权限调整时 ++，JWT 内嵌旧值将立即失效（强制重登）
+  tokenVersion         Int                   @default(0)
+  remark               String?               @db.VarChar(500)
+  lastLoginAt          DateTime?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  createdById          Int?
+  updatedById          Int?
+  roles                SysUserRole[]
+  createdCustomers     CrmCustomer[]         @relation("CustomerCreatedBy")
+  updatedCustomers     CrmCustomer[]         @relation("CustomerUpdatedBy")
+  ownedCustomers       CrmCustomer[]         @relation("CustomerOwner")
+  createdOpportunities CrmOpportunity[]      @relation("OpportunityCreatedBy")
+  ownedOpportunities   CrmOpportunity[]      @relation("OpportunityOwner")
+  sharedOpportunities  CrmOpportunityShare[]
+  projectFollows       CrmProjectFollow[]
+  customerFollows      CrmCustomerFollow[]
+  ownedWorkLogs        CrmWorkLog[]         @relation("WorkLogOwner")
+  createdWorkLogs      CrmWorkLog[]         @relation("WorkLogCreatedBy")
+  weekSummaries        CrmWeekSummary[]
+  dailyReports         CrmDailyReport[]
+  ownedInventories     BizInventory[]        @relation("BizInventoryOwner")
+  createdInventories   BizInventory[]        @relation("BizInventoryCreatedBy")
+  updatedInventories   BizInventory[]        @relation("BizInventoryUpdatedBy")
+  ownedPurchases       BizPurchase[]         @relation("BizPurchaseOwner")
+  createdPurchases     BizPurchase[]         @relation("BizPurchaseCreatedBy")
+  updatedPurchases     BizPurchase[]         @relation("BizPurchaseUpdatedBy")
+
+  @@index([username])
+  @@index([deptId])
+}
+
+model SysRole {
+  id            Int           @id @default(autoincrement())
+  code          String        @unique @db.VarChar(50)
+  name          String        @db.VarChar(50)
+  dataScope     Int           @default(4) // 1全部 2本部门及下级 3本部门 4本人 5自定义
+  customDeptIds Int[]         @default([])
+  isActive      Boolean       @default(true)
+  remark        String?       @db.VarChar(500)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  users         SysUserRole[]
+  menus         SysRoleMenu[]
+  operations    SysRoleOperation[]
+  isSystem       Boolean              @default(false)
+}
+
+model SysUserRole {
+  userId Int
+  roleId Int
+  user   SysUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   SysRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+}
+
+model SysDept {
+  id          Int           @id @default(autoincrement())
+  parentId    Int?
+  parent      SysDept?      @relation("DeptTree", fields: [parentId], references: [id])
+  children    SysDept[]     @relation("DeptTree")
+  name        String        @db.VarChar(50)
+  code        String?       @db.VarChar(50)
+  sort        Int           @default(0)
+  isActive    Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  users         SysUser[]
+  CrmCustomer   CrmCustomer[]
+  opportunities CrmOpportunity[]
+  contracts     SalesContract[]
+  quotations    SalesQuotation[]
+  workLogs      CrmWorkLog[]
+  inventories   BizInventory[]
+  purchases     BizPurchase[]
+
+  @@index([parentId])
+}
+
+model SysMenu {
+  id        Int           @id @default(autoincrement())
+  parentId  Int?
+  type      String        @db.VarChar(20)
+  name      String        @db.VarChar(50)
+  path      String?       @db.VarChar(200)
+  component String?       @db.VarChar(200)
+  icon      String?       @db.VarChar(50)
+  permCode  String?       @db.VarChar(100)
+  sort      Int           @default(0)
+  isActive  Boolean       @default(true)
+  roles     SysRoleMenu[]
+  userMenus SysUserMenu[]
+  operations SysOperation[]
+}
+
+model SysRoleMenu {
+  roleId Int
+  menuId Int
+  role   SysRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  menu   SysMenu @relation(fields: [menuId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, menuId])
+}
+
+// 操作权限目录：每个"功能"下的可执行动作（查/增/改/删/导出/导入/审核/分配…）
+model SysOperation {
+  id       Int      @id @default(autoincrement())
+  menuId   Int?
+  menu     SysMenu? @relation(fields: [menuId], references: [id], onDelete: SetNull)
+  code     String   @unique @db.VarChar(100) // 权限码，如 crm:customer:delete
+  name     String   @db.VarChar(50)
+  module   String?  @db.VarChar(50) // 所属模块，如 客户/项目/系统
+  group    String?  @db.VarChar(50)
+  sort     Int      @default(0)
+  isActive Boolean  @default(true)
+  roleOperations SysRoleOperation[]
+  userOperations SysUserOperation[]
+}
+
+// 角色默认操作模板（套用用）
+model SysRoleOperation {
+  roleId      Int
+  operationId Int
+  role        SysRole      @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  operation   SysOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  @@id([roleId, operationId])
+}
+
+// 用户最终菜单授权（勾选=可见）
+model SysUserMenu {
+  userId Int
+  menuId Int
+  user   SysUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  menu   SysMenu @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  @@id([userId, menuId])
+}
+
+// 用户最终操作授权（勾选=可执行）
+model SysUserOperation {
+  userId      Int
+  operationId Int
+  user        SysUser      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  operation   SysOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  @@id([userId, operationId])
+}
+
+model SysDict {
+  id       Int     @id @default(autoincrement())
+  type     String  @db.VarChar(50)
+  label    String  @db.VarChar(50)
+  value    String  @db.VarChar(50)
+  sort     Int     @default(0)
+  isActive Boolean @default(true)
+
+  @@index([type])
+}
+
+// =================== 公司信息（单例，供登录/侧栏/PDF/合同引用） ===================
+
+model SysCompany {
+  id        Int      @id @default(autoincrement())
+  name      String   @db.VarChar(100) // 公司名称（必填）
+  shortName String?  @db.VarChar(50) // 简称
+  bankName  String?  @db.VarChar(100) // 开户行
+  account   String?  @db.VarChar(50) // 账号
+  phone     String?  @db.VarChar(30) // 电话
+  address   String?  @db.VarChar(300) // 地址
+  taxNo     String?  @db.VarChar(50) // 税号
+  email     String?  @db.VarChar(100)
+  website   String?  @db.VarChar(200)
+  logoUrl   String?  @db.VarChar(500) // 公司 Logo 图片
+  remark    String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// =================== 客户 (v2) ===================
+
+model CrmCustomer {
+  id                 Int                  @id @default(autoincrement())
+  code               String               @unique @db.VarChar(30)
+  name               String               @db.VarChar(100)
+  pinyin             String?              @db.VarChar(200)
+  shortName          String?              @db.VarChar(50)
+  type               String?              @db.VarChar(20)
+  category           String?              @db.VarChar(20)
+  followStage        String?              @db.VarChar(20)
+  source             String?              @db.VarChar(20)
+  industry           String?              @db.VarChar(50)
+  scale              String?              @db.VarChar(20)
+  valueRating        String?              @db.VarChar(20)
+  creditLevel        String?              @db.VarChar(20)
+  currencyCode       String?              @db.VarChar(10)
+  paymentLimitPct    Decimal?             @db.Decimal(5, 2)
+  address            String?              @db.VarChar(200)
+  zipcode            String?              @db.VarChar(10)
+  legalPerson        String?              @db.VarChar(50)
+  registeredCapital  Decimal?             @db.Decimal(18, 2)
+  park               String?              @db.VarChar(100)
+  phone              String?              @db.VarChar(30)
+  fax                String?              @db.VarChar(30)
+  email              String?              @db.VarChar(100)
+  website            String?              @db.VarChar(200)
+  stateId            Int?
+  cityId             Int?
+  districtId         Int?
+  region             Json?
+  intro              String?              @db.Text
+  cooperationStatus  String?              @db.Text
+  prospect           String?              @db.Text
+  strategy           String?              @db.Text
+  legalPersonOld     String?              @db.VarChar(50) // 兼容旧字段
+  taxId              String?              @db.VarChar(50)
+  invoiceTitle       String?              @db.VarChar(200)
+  invoiceBank        String?              @db.VarChar(100)
+  invoiceBankAccount String?              @db.VarChar(50)
+  bankName           String?              @db.VarChar(100)
+  accountName        String?              @db.VarChar(100)
+  bankCode           String?              @db.VarChar(50)
+  bankAccount        String?              @db.VarChar(50)
+  bankAddress        String?              @db.VarChar(200)
+  bankPhone          String?              @db.VarChar(50)
+  paymentDays        Int?
+  settleDay          Int?
+  settleContact      String?              @db.VarChar(50)
+  ownerId            Int?
+  owner              SysUser?             @relation("CustomerOwner", fields: [ownerId], references: [id])
+  deptId             Int?
+  dept               SysDept?             @relation(fields: [deptId], references: [id])
+  sharedUserIds      Int[]                @default([])
+  attachments        Json?
+  remark             String?              @db.Text
+  isActive           Boolean              @default(true)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  createdById        Int?
+  createdBy          SysUser?             @relation("CustomerCreatedBy", fields: [createdById], references: [id])
+  updatedById        Int?
+  updatedBy          SysUser?             @relation("CustomerUpdatedBy", fields: [updatedById], references: [id])
+  workLogs            CrmWorkLog[]         @relation("WorkLogCustomer")
+  contacts           CrmContact[]
+  opportunities      CrmOpportunity[]
+  inherits           CrmCustomerInherit[]
+  follows            CrmCustomerFollow[]
+
+  @@index([name])
+  @@index([pinyin])
+  @@index([type])
+  @@index([ownerId])
+  @@index([ownerId, createdAt(sort: Desc)])
+}
+
+model CrmContact {
+  id          Int         @id @default(autoincrement())
+  customerId  Int
+  customer    CrmCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  name        String      @db.VarChar(50)
+  gender      String?     @db.VarChar(10)
+  department  String?     @db.VarChar(50)
+  position    String?     @db.VarChar(50)
+  officePhone String?     @db.VarChar(30)
+  fax         String?     @db.VarChar(30)
+  mobile      String?     @db.VarChar(30)
+  wechat      String?     @db.VarChar(50)
+  email       String?     @db.VarChar(100)
+  isPrimary   Boolean     @default(false)
+  remark      String?     @db.VarChar(500)
+  sort        Int         @default(0)
+  createdAt   DateTime    @default(now())
+
+  @@index([customerId])
+}
+
+model CrmCustomerInherit {
+  id            Int         @id @default(autoincrement())
+  customerId    Int
+  customer      CrmCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  fromUserId    Int
+  toUserId      Int
+  inheritedAt   DateTime    @default(now())
+  inheritedById Int
+  reason        String?     @db.VarChar(500)
+
+  @@index([customerId])
+}
+
+// 客户跟进记录
+model CrmCustomerFollow {
+  id          Int         @id @default(autoincrement())
+  customerId  Int
+  customer    CrmCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  followerId  Int
+  follower    SysUser     @relation(fields: [followerId], references: [id])
+  followDate  DateTime    @default(now())
+  period      String?     @db.VarChar(10) // 上午/下午：'am' / 'pm' / null
+  schedule    String?     @db.VarChar(500) // 日程（纯文字）
+  contactName String?     @db.VarChar(50)
+  content     String      @db.Text
+  createdAt   DateTime    @default(now())
+
+  @@index([customerId])
+}
+
+// =================== 项目/商机 (v3) ===================
+
+model CrmOpportunity {
+  id              Int                   @id @default(autoincrement())
+  code            String                @unique @db.VarChar(30)
+  name            String                @db.VarChar(200)
+  customerCode    String?               @db.VarChar(30) // *必填
+  customerId      Int?
+  customer        CrmCustomer?          @relation(fields: [customerId], references: [id])
+  contactIds      Int[]                 @default([])
+  dateOpen        DateTime              @default(now()) // *必填
+  region          Json?
+  stateId         Int?
+  cityId          Int?
+  districtId      Int?
+  ownerId         Int? // *必填
+  owner           SysUser?              @relation("OpportunityOwner", fields: [ownerId], references: [id])
+  deptId          Int?
+  dept            SysDept?              @relation(fields: [deptId], references: [id])
+  currencyCode    String?               @db.VarChar(10)
+  expectedRevenue Decimal?              @db.Decimal(18, 2)
+  discountPct     Decimal?              @db.Decimal(5, 2)
+  amountFinal     Decimal?              @db.Decimal(18, 2)
+  category        String?               @db.VarChar(50) // *必填
+  stage           String?               @db.VarChar(50) // *必填
+  source          String?               @db.VarChar(50) // *必填
+  state           String?               @db.VarChar(50) // *必填
+  plannedCost     Decimal?              @db.Decimal(18, 2)
+  projectDate     DateTime?
+  lastFollowDate  DateTime?
+  contractId      Int?
+  contract        SalesContract?        @relation(fields: [contractId], references: [id])
+  submitStatus    String                @default("draft") // draft / active
+  description     String?               @db.Text
+  attachments     Json?                 // 项目附件（图片/文件，与客户/库存/采购一致）
+  // 旧字段保留
+  discountType    String?               @db.VarChar(20)
+  discountValue   Decimal?              @db.Decimal(18, 2)
+  amountTotal     Decimal?              @db.Decimal(18, 2)
+  workflowId      Int?
+  expectedDate    DateTime?
+  zdy1            String?               @db.VarChar(100)
+  zdy2            String?               @db.VarChar(100)
+  zdy3            String?               @db.VarChar(100)
+  zdy4            String?               @db.VarChar(100)
+  zdy5            String?               @db.VarChar(50)
+  zdy6            String?               @db.VarChar(50)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  createdById     Int?
+  createdBy       SysUser?              @relation("OpportunityCreatedBy", fields: [createdById], references: [id])
+  workLogs        CrmWorkLog[]          @relation("WorkLogProject")
+  lines           CrmOpportunityLine[]
+  shares          CrmOpportunityShare[]
+  items           CrmProjectItem[]
+  follows         CrmProjectFollow[]
+  inherits        CrmProjectInherit[]
+
+  @@index([customerId])
+  @@index([ownerId])
+  @@index([customerCode])
+  @@index([ownerId, createdAt(sort: Desc)])
+}
+
+model CrmOpportunityShare {
+  opportunityId Int
+  userId        Int
+  opportunity   CrmOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  user          SysUser        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([opportunityId, userId])
+}
+
+model CrmOpportunityLine {
+  id            Int            @id @default(autoincrement())
+  opportunityId Int
+  opportunity   CrmOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  productName   String         @db.VarChar(200)
+  quantity      Decimal        @db.Decimal(18, 4)
+  unitPrice     Decimal        @db.Decimal(18, 4)
+  discount      Decimal?       @db.Decimal(5, 2)
+  amount        Decimal        @db.Decimal(18, 2)
+  remark        String?        @db.VarChar(500)
+  sort          Int            @default(0)
+}
+
+// 项目商品明细 (新表)
+model CrmProjectItem {
+  id          Int            @id @default(autoincrement())
+  projectId   Int
+  project     CrmOpportunity @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  productName String         @db.VarChar(200)
+  productCode String?        @db.VarChar(100)
+  model       String?        @db.VarChar(100)
+  unitPrice   Decimal?       @db.Decimal(18, 4)
+  quantity    Decimal?       @db.Decimal(18, 4)
+  amount      Decimal?       @db.Decimal(18, 2)
+  sort        Int            @default(0)
+  createdAt   DateTime       @default(now())
+
+  @@index([projectId])
+}
+
+// 项目跟进记录
+model CrmProjectFollow {
+  id          Int            @id @default(autoincrement())
+  projectId   Int
+  project     CrmOpportunity @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  followerId  Int
+  follower    SysUser        @relation(fields: [followerId], references: [id])
+  followDate  DateTime       @default(now())
+  period      String?        @db.VarChar(10) // 上午/下午：'am' / 'pm' / null
+  schedule    String?        @db.VarChar(500) // 日程（纯文字）
+  contactName String?        @db.VarChar(50)
+  content     String         @db.Text
+  createdAt   DateTime       @default(now())
+
+  @@index([projectId])
+}
+
+// 项目继承历史
+model CrmProjectInherit {
+  id            Int            @id @default(autoincrement())
+  projectId     Int
+  project       CrmOpportunity @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  fromUserId    Int
+  toUserId      Int
+  inheritedAt   DateTime       @default(now())
+  inheritedById Int
+  reason        String?        @db.VarChar(500)
+
+  @@index([projectId])
+}
+
+// =================== 销售 (报价/合同) ===================
+
+model SalesQuotation {
+  id               Int                  @id @default(autoincrement())
+  code             String               @unique @db.VarChar(30)
+  title            String               @db.VarChar(200)
+  date             DateTime             @default(now())
+  customerName     String               @db.VarChar(200)
+  contactName      String?              @db.VarChar(50)
+  sort1            String?              @db.VarChar(50)
+  currencyCode     String?              @db.VarChar(10)
+  discountType     String?              @db.VarChar(20)
+  discountValue    Decimal?             @db.Decimal(18, 2)
+  amountTotal      Decimal?             @db.Decimal(18, 2)
+  opportunityId    Int?
+  opportunityCode  String?              @db.VarChar(30)
+  linkCustomerName String?              @db.VarChar(200)
+  linkContactName  String?              @db.VarChar(50)
+  validDate        DateTime?
+  intro            String?              @db.VarChar(1000)
+  intro1           String?              @db.VarChar(500)
+  intro2           String?              @db.VarChar(500)
+  intro3           String?              @db.VarChar(500)
+  intro4           String?              @db.VarChar(500)
+  intro5           String?              @db.VarChar(500)
+  intro6           String?              @db.VarChar(500)
+  approvalState    String               @default("draft")
+  isContracted     Boolean              @default(false)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  createdById      Int?
+  deptId           Int?
+  dept             SysDept?             @relation(fields: [deptId], references: [id])
+  lines            SalesQuotationLine[]
+}
+
+model SalesQuotationLine {
+  id                    Int            @id @default(autoincrement())
+  quotationId           Int
+  quotation             SalesQuotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  productName           String         @db.VarChar(200)
+  quantity              Decimal        @db.Decimal(18, 4)
+  unitPrice             Decimal        @db.Decimal(18, 4)
+  discount              Decimal?       @db.Decimal(5, 2)
+  priceIncludeTax       Decimal        @db.Decimal(18, 4)
+  invoiceType           String?        @db.VarChar(30)
+  taxRate               Decimal?       @db.Decimal(5, 2)
+  moneyBeforeTax        Decimal        @db.Decimal(18, 2)
+  concessions           Decimal?       @db.Decimal(18, 2)
+  moneyAfterConcessions Decimal?       @db.Decimal(18, 2)
+  amount                Decimal        @db.Decimal(18, 2)
+  pricejy               Decimal        @db.Decimal(18, 2)
+  validDate             DateTime?
+  intro                 String?        @db.VarChar(500)
+  zdy1                  String?        @db.VarChar(100)
+  zdy2                  String?        @db.VarChar(100)
+  zdy3                  String?        @db.VarChar(100)
+  zdy4                  String?        @db.VarChar(100)
+  zdy5                  String?        @db.VarChar(50)
+  zdy6                  String?        @db.VarChar(50)
+  sort                  Int            @default(0)
+}
+
+model SalesContract {
+  id              Int                        @id @default(autoincrement())
+  code            String                     @unique @db.VarChar(30)
+  title           String                     @db.VarChar(200)
+  customerName    String                     @db.VarChar(200)
+  signDate        DateTime                   @default(now())
+  startDate       DateTime?
+  endDate         DateTime?
+  person1Name     String?                    @db.VarChar(50)
+  person2Name     String?                    @db.VarChar(50)
+  ownerName       String?                    @db.VarChar(50)
+  sort            String?                    @db.VarChar(50)
+  completeState   String?                    @db.VarChar(50)
+  currencyCode    String?                    @db.VarChar(10)
+  amountTotal     Decimal?                   @db.Decimal(18, 2)
+  discountValue   Decimal?                   @db.Decimal(18, 2)
+  amountFinal     Decimal?                   @db.Decimal(18, 2)
+  plan            String?                    @db.VarChar(50)
+  invoicePlan     String?                    @db.VarChar(50)
+  paybackMode     String?                    @db.VarChar(50)
+  invoiceMode     String?                    @db.VarChar(50)
+  paybackDays     Int?
+  isDispatch      Boolean                    @default(false)
+  opportunityCode String?                    @db.VarChar(30)
+  linkCustomer    String?                    @db.VarChar(200)
+  linkContact     String?                    @db.VarChar(50)
+  signPlace       String?                    @db.VarChar(200)
+  brand           String?                    @db.VarChar(100)
+  intro           String?                    @db.VarChar(500)
+  intro1          String?                    @db.VarChar(500)
+  intro2          String?                    @db.VarChar(500)
+  intro3          String?                    @db.VarChar(500)
+  intro4          String?                    @db.VarChar(500)
+  intro5          String?                    @db.VarChar(500)
+  intro6          String?                    @db.VarChar(500)
+  approvalState   String                     @default("draft")
+  quotationId     Int?
+  sharedUserIds   Int[]                      @default([])
+  createdAt       DateTime                   @default(now())
+  updatedAt       DateTime                   @updatedAt
+  createdById     Int?
+  deptId           Int?
+  dept             SysDept?             @relation(fields: [deptId], references: [id])
+  lines           SalesContractLine[]
+  paymentPlans    SalesContractPaymentPlan[]
+  CrmOpportunity  CrmOpportunity[]
+
+  @@index([deptId, createdAt(sort: Desc)])
+}
+
+model SalesContractLine {
+  id                    Int           @id @default(autoincrement())
+  contractId            Int
+  contract              SalesContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  productName           String        @db.VarChar(200)
+  quantity              Decimal       @db.Decimal(18, 4)
+  unitPrice             Decimal       @db.Decimal(18, 4)
+  discount              Decimal?      @db.Decimal(5, 2)
+  priceIncludeTax       Decimal       @db.Decimal(18, 4)
+  invoiceType           String?       @db.VarChar(30)
+  taxRate               Decimal?      @db.Decimal(5, 2)
+  moneyAfterTax         Decimal       @db.Decimal(18, 2)
+  concessions           Decimal?      @db.Decimal(18, 2)
+  moneyAfterConcessions Decimal?      @db.Decimal(18, 2)
+  amount                Decimal       @db.Decimal(18, 2)
+  pricejy               Decimal       @db.Decimal(18, 2)
+  deliveryDate          DateTime?
+  deliveryMode          String?       @db.VarChar(50)
+  intro                 String?       @db.VarChar(500)
+  zdy1                  String?       @db.VarChar(100)
+  zdy2                  String?       @db.VarChar(100)
+  zdy3                  String?       @db.VarChar(100)
+  zdy4                  String?       @db.VarChar(100)
+  zdy5                  String?       @db.VarChar(50)
+  zdy6                  String?       @db.VarChar(50)
+  zdy2435               String?       @db.VarChar(100)
+  sort                  Int           @default(0)
+}
+
+model SalesContractPaymentPlan {
+  id         Int           @id @default(autoincrement())
+  contractId Int
+  contract   SalesContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  seq        Int
+  planDate   DateTime
+  amount     Decimal       @db.Decimal(18, 2)
+  isReceived Boolean       @default(false)
+  receivedAt DateTime?
+  remark     String?       @db.VarChar(200)
+}
+
+// =================== 公共: 行政区划 + 附件 ===================
+
+model SysRegion {
+  id       Int         @id @default(autoincrement())
+  code     String      @db.VarChar(20)
+  name     String      @db.VarChar(50)
+  level    Int
+  parentId Int?
+  parent   SysRegion?  @relation("RegionTree", fields: [parentId], references: [id])
+  children SysRegion[] @relation("RegionTree")
+
+  @@index([parentId])
+  @@index([code])
+  @@index([level])
+}
+
+model SysAttach {
+  id         Int      @id @default(autoincrement())
+  bizType    String   @db.VarChar(20)
+  bizId      Int
+  fileName   String   @db.VarChar(200)
+  fileUrl    String   @db.VarChar(500)
+  fileSize   Int      @default(0)
+  mimeType   String?  @db.VarChar(100)
+  uploaderId Int
+  createdAt  DateTime @default(now())
+
+  @@index([bizType, bizId])
+}
+
+// =================== 审计 ===================
+
+model SysLoginLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int?
+  username  String   @db.VarChar(50)
+  ip        String?  @db.VarChar(50)
+  userAgent String?  @db.VarChar(500)
+  status    Boolean
+  message   String?  @db.VarChar(200)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model SysOperLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int?
+  username  String   @db.VarChar(50)
+  module    String   @db.VarChar(50)
+  action    String   @db.VarChar(50)
+  targetId  Int?
+  detail    String?  @db.Text
+  ip        String?  @db.VarChar(50)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([module])
+}
+
+// =================== 工作日志 ===================
+
+model CrmWorkLog {
+  id          Int          @id @default(autoincrement())
+  code        String       @db.VarChar(50)
+  date        DateTime
+  ownerId     Int
+  owner       SysUser      @relation("WorkLogOwner", fields: [ownerId], references: [id])
+  customerId  Int?
+  customer    CrmCustomer? @relation("WorkLogCustomer", fields: [customerId], references: [id])
+  projectId   Int?
+  project     CrmOpportunity? @relation("WorkLogProject", fields: [projectId], references: [id])
+  content     String       @db.Text
+  duration    Float?
+  attachments Json?
+  createdById Int
+  createdBy   SysUser      @relation("WorkLogCreatedBy", fields: [createdById], references: [id])
+  deptId      Int?
+  dept        SysDept?     @relation(fields: [deptId], references: [id])
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([ownerId])
+  @@index([customerId])
+  @@index([projectId])
+  @@index([date])
+  @@index([ownerId, date(sort: Desc)])
+  @@index([customerId, date(sort: Desc)])
+}
+
+// =================== 工作日志·本周总结（按用户+周唯一） ===================
+
+model CrmWeekSummary {
+  id          Int      @id @default(autoincrement())
+  ownerId     Int
+  owner       SysUser  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  weekStart   DateTime // 本周一 00:00（按 ISO 周，周一为起点）
+  // 本周工作计划（nullable 兼容老数据；与 content 同款 Text）
+  plan        String?  @db.Text
+  content     String?  @db.Text
+  attachments Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([ownerId, weekStart])
+  @@index([ownerId, weekStart])
+}
+
+// =================== 工作日报（按用户+日期唯一） ===================
+
+model CrmDailyReport {
+  id          Int      @id @default(autoincrement())
+  ownerId     Int
+  owner       SysUser  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  date        DateTime // 日报日期 00:00
+  content     String?  @db.Text
+  attachments Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([ownerId, date])
+  @@index([ownerId, date])
+}
+
+// =================== 非销售日程管理（按人/周 18行×6列 固定布局） ===================
+
+model CrmWeeklySchedule {
+  id            Int      @id @default(autoincrement())
+  ownerId       Int
+  owner         SysUser  @relation("CrmWeeklyScheduleOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  weekStart     DateTime // 本周一 00:00
+  // 顶部 3 行（本周工作计划 / 总结 / 领导评定）
+  planText      String?  @db.Text
+  summaryText   String?  @db.Text
+  leaderComment String?  @db.Text
+  // 7 天 × 2 行（上/下午）共 14 行单元格的 4 列内容
+  // 结构: [{ date: 'YYYY-MM-DD', am: {content, progress, done, remark}, pm: {...} }, ...]
+  days          Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([ownerId, weekStart])
+  @@index([ownerId, weekStart])
+}
+
+// =================== 销售日程管理（按人/周 18行×8列 顶部3段+7天×2行 跟进聚合） ===================
+
+model CrmSalesSchedule {
+  id            Int      @id @default(autoincrement())
+  ownerId       Int
+  owner         SysUser  @relation("CrmSalesScheduleOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  weekStart     DateTime // 本周一 00:00
+  // 顶部 3 行（本周工作计划 / 总结 / 领导评定）—— 销售自己填写
+  planText      String?  @db.Text
+  summaryText   String?  @db.Text
+  leaderComment String?  @db.Text
+  // 第 3-8 列（日程/客户/项目/联系人/里程碑/跟进情况）不存 DB，每次从 CrmCustomerFollow + CrmProjectFollow 实时聚合
+  // R17 3.2：daysSnapshot 字段——销售主动提交时（upsert）冻结当时的聚合快照，避免 follow 被后续修改影响历史查看
+  daysSnapshot  Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([ownerId, weekStart])
+  @@index([ownerId, weekStart])
+}
+
+// =================== 商务管理：库存明细 ===================
+model BizInventory {
+  id            Int      @id @default(autoincrement())
+  productName   String   @db.VarChar(100) // 商品名称（必填，业务层校验）
+  productModel  String   @db.VarChar(100) // 商品型号（必填，业务层校验）
+  manufacturer  String   @db.VarChar(100) // 厂家（必填，业务层校验）
+  date          DateTime? // 日期
+  remark        String?  @db.Text
+  attachments   Json?
+  isActive      Boolean  @default(true)
+  ownerId       Int?
+  owner         SysUser? @relation("BizInventoryOwner", fields: [ownerId], references: [id])
+  deptId        Int?
+  dept          SysDept? @relation(fields: [deptId], references: [id])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  createdById   Int?
+  createdBy     SysUser? @relation("BizInventoryCreatedBy", fields: [createdById], references: [id])
+  updatedById   Int?
+  updatedBy     SysUser? @relation("BizInventoryUpdatedBy", fields: [updatedById], references: [id])
+
+  @@index([productName])
+  @@index([productModel])
+  @@index([manufacturer])
+  @@index([date])
+  @@index([ownerId])
+}
+
+// =================== 商务管理：采购明细 ===================
+model BizPurchase {
+  id            Int      @id @default(autoincrement())
+  productName   String   @db.VarChar(100) // 商品名称（必填，业务层校验）
+  productModel  String   @db.VarChar(100) // 商品型号（必填，业务层校验）
+  manufacturer  String   @db.VarChar(100) // 厂家（必填，业务层校验）
+  date          DateTime? // 日期
+  remark        String?  @db.Text
+  attachments   Json?
+  isActive      Boolean  @default(true)
+  ownerId       Int?
+  owner         SysUser? @relation("BizPurchaseOwner", fields: [ownerId], references: [id])
+  deptId        Int?
+  dept          SysDept? @relation(fields: [deptId], references: [id])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  createdById   Int?
+  createdBy     SysUser? @relation("BizPurchaseCreatedBy", fields: [createdById], references: [id])
+  updatedById   Int?
+  updatedBy     SysUser? @relation("BizPurchaseUpdatedBy", fields: [updatedById], references: [id])
+
+  @@index([productName])
+  @@index([productModel])
+  @@index([manufacturer])
+  @@index([date])
+  @@index([ownerId])
+}

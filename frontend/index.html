@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>陕西飞创腾达电子科技有限公司</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <!-- 诊断用：捕获错误仅记录到控制台，不显示到页面 -->
+    <script>
+      (function () {
+        window.addEventListener('error', function (e) {
+          var m;
+          if (e && e.target && (e.target.src || e.target.href)) {
+            m = '[resource error] failed to load: ' + (e.target.src || e.target.href);
+          } else {
+            m = '[window.error] ' + (e && e.message ? e.message : e);
+            if (e && e.filename) m += '\n  at ' + e.filename + ':' + (e.lineno || '?');
+          }
+          console.error(m);
+          // 只记录到控制台，不在页面显示
+        }, true);
+        window.addEventListener('unhandledrejection', function (e) {
+          var r = e && e.reason ? (e.reason.stack || e.reason.message || e.reason) : e;
+          var m = '[unhandledrejection] ' + r;
+          console.error(m);
+          // 只记录到控制台，不在页面显示红条
+        });
+        console.log('[boot] index.html inline script loaded at ' + new Date().toISOString());
+        // 看门狗：4 秒后若 #app 仍为空且未捕获到任何错误，说明前端 JS 根本没跑起来，
+        // 最常见原因是浏览器代理/VPN 拦截了本机 127.0.0.1 / localhost 请求 -> 给出明确指引。
+        setTimeout(function () {
+          try {
+            var app = document.getElementById('app');
+            if (!app || app.childElementCount === 0) {
+              // 只在控制台记录，不在页面显示
+              console.error(
+                '[watchdog] 4 秒后 #app 仍然为空，前端 JS 很可能没有执行。\n' +
+                '最常见原因：浏览器代理 / VPN 拦截了发往 127.0.0.1 / localhost 的请求。\n' +
+                '请检查：1) 代理例外是否加了 127.0.0.1;localhost;2) 是否需要关闭 VPN;3) 改用局域网 IP 访问。'
+              );
+            }
+          } catch (e) {}
+        }, 4000);
+      })();
+    </script>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
