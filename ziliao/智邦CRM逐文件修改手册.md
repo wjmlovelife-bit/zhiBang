@@ -2,12 +2,15 @@
 
 > 仓库：https://github.com/wjmlovelife-bit/zhiBang  
 > 对照版本：e898e1c7d1332b46226744b7c42a9640c2cb03c2  
-> 编写日期：2026-10-14  
-> 本文只给修改说明和代码，没有修改仓库。
+> 编写日期：2026-10-14；修订日期：2026-10-15  
+> 本文是修改建议与代码说明；本次修订只更新该 Markdown 文档，没有修改业务代码或数据库。
+> 修订版：依据源码及外部可行性分析复核，补充历史单据、旧快照、数值精度和前后端依赖的处理。
+> 业务代码基准仍为 e898e1c；复核时 main=db2fcef，其与基准的差异仅为新增本手册。
+> 不承诺“100% 可行”或“全部代码已项目级编译”。新增函数在旧源码中不存在，是实施前的正常状态，不能据此判断版本不一致。
 
 ## 0. 阅读与执行规则
 
-本文按现有代码给出一套确定的第一阶段修改，不把互相排斥的方案混在一起。先完成第一阶段，再考虑附录的数据模型扩展。
+本文区分已确认的缺陷修复、需要兼容历史数据的实现，以及需要明确采用的业务规则。不能把全部章节视为已验证、可无条件逐字执行的补丁。先完成相互依赖的功能组，再考虑附录的数据模型扩展；不要把“字段被提交”误认为“业务值已经改变”。
 
 **全文路径相对于仓库根目录。** “新增文件”表示写入代码块全部内容；“替换方法”表示替换从方法声明到对应结束大括号的整个方法；“替换片段”用原代码作为搜索锚点。不要只按旧行号操作。
 
@@ -18,38 +21,48 @@
 | 事项 | 本文采用的规则 |
 | --- | --- |
 | 联系人 | 保留 ID；被项目引用的联系人不能直接删除；第一阶段保留现有 contactIds 数组 |
-| 报价明细 | 第一阶段保留整单替换，但事务必须原子完成 |
+| 报价/合同明细 | 计价输入不变时按原 ID 更新非计价字段；仅草稿真实改变计价输入时在事务内核算、替换 |
 | 项目金额 | discountPct 是“折数”，10=原价、8=八折 |
 | 报价/合同折扣 | discount 是“减免百分比”，10=减免 10% |
 | 单价 | 报价/合同 unitPrice 按现有前端公式视为不含税单价 |
-| 金额舍入 | 每行含税金额四舍五入到两位；主表为已舍入行金额之和 |
+| 金额舍入 | 新单及允许核算的草稿每行含税金额四舍五入到两位，主表汇总；历史单据普通编辑保留原金额 |
+| 历史单据 | 非 draft 状态禁止通过普通更新改变计价、币种或退回草稿；变更流程另行定义 |
+| 付款计划合计 | 默认不新增提交门槛；严格合计校验是独立可选规则，确认采用后才能开启 |
 | 可空字段 | 未传不修改；null/兼容空字符串表示清空 |
 | 业务日期 | 第一阶段继续用 UTC 零点编码纯日期，不直接改变现有日期列类型 |
 | 创建时间统计 | 按 Asia/Shanghai 的业务日边界统计真实时间戳 |
 | 导入 | 整批事务；一个批次确认成功后重复确认返回原结果 |
-| 日程 | 草稿实时聚合；显式提交冻结；重新打开草稿保留旧快照，直到再次提交 |
+| 日程 | draft 实时聚合、submitted 显式提交冻结；旧数据为 legacy_snapshot，不能据快照推断提交行为 |
 | 销售统计 | 新增按创建人；持有量按当前负责人；总计与人员明细同口径 |
 | 编号 | 使用现有全局序列；日期为上海业务日期；允许空号，不做每日序号重置 |
 
 上述金额规则来自目前表单公式，但 pricejy 等旧字段没有足够业务定义。本文不会凭字段名发明公式：保留旧字段值，新的零值仍仅作为兼容必填列的默认值；不将它们当作统计依据。
 
-**不要对已确认历史合同直接批量重算金额。** 本文代码对新建和后续编辑采用统一公式；历史差异应先列出再由业务人员决定。
+**历史金额保护同样适用于逐笔普通编辑。** 前端可能整单回传明细，后端必须比较规范化计价值，不能因为 lines/discountValue 存在就重算。新建及实际改变计价的草稿采用新公式；非草稿计价变更返回明确错误，待业务定义变更动作后再实现，不能先改回草稿绕过。
 
-### 0.2 第一阶段执行顺序
+客户、项目、合同等全部业务流程尚未被完整定义。本手册不新增猜测的审批、收款或库存规则。
 
-1. 第 1 节：新增公共值解析与金额工具。
-2. 第 2 节：修复客户创建人和联系人更新。
-3. 第 3 节：修复项目金额、客户关联、跟进日期。
-4. 第 4 节：报价与合同事务及金额。
-5. 第 5 节：Excel 导出。
-6. 第 6 节：销售统计。
-7. 第 7 节：导入批次。
-8. 第 8 节：日程草稿与提交。
-9. 第 9 节：分页、编号和接口类型。
-10. 第 10 节：前端配套映射、日期及联动。
-11. 附录：后续关系表和业务模型扩展，不与第一阶段代码混贴。
+### 0.2 按依赖成组实施
 
-后文依赖前文新增的方法。不要跳过公共工具后直接粘贴 Service 方法。
+章节号用于定位，不代表可以逐节独立完成。按以下功能组实施：
+
+| 功能组 | 同组必须完成的章节/调用链 |
+| --- | --- |
+| 公共基础 | 1；需要编号/分页时同时完成 9 的工具；需要表单映射时先新增 10.1/10.2 |
+| 客户联系人 | 2 + 10 的客户提交映射；保留 ID；需要数据库级引用保证时连同附录 A |
+| 项目数据 | 3 + 10 的项目映射、日期与客户联动 |
+| 报价/合同 | 1.2 + 4 + 10 的两份表单；普通编辑保护、付款计划 ID 必须一起完成 |
+| Excel | 5；若同时采用日程状态变更，与 8 的读取语义保持一致 |
+| 统计 | 6；创建人修复依赖 2；新建贡献与当前持有标签同步修改 |
+| 导入 | 7 的模型、预览、确认、DTO、api/index.ts、Import.vue 一起完成 |
+| 日程 | 8 的模型、迁移、状态接口、版本号、表单、历史兼容一起完成 |
+| 分页/编号/日期 | 9 + 10 中实际调用者；不提前引用尚未新增的工具 |
+
+**不能把前端第 10 节整体推迟。** 后端要求付款计划 ID、batchId、version 后，旧前端不能继续按旧请求协议工作。
+
+报价更新原子事务、联系人稳定 ID、字段清空和项目局部金额是先处理的缺陷；付款计划严格合计、库存流程等不是这些修复的前置条件。
+
+改动工作量以实际代码差异、历史数据及业务规则确认情况为准，不承诺固定工时。
 
 ### 0.3 修改范围清单
 
@@ -84,6 +97,7 @@
 - backend/prisma/schema.prisma
 - frontend/src/api/index.ts
 - frontend/src/views/sales/customer/Form.vue
+- frontend/src/views/sales/customer/List.vue
 - frontend/src/views/sales/project/Form.vue
 - frontend/src/views/sales/project/Import.vue
 - frontend/src/views/sales/quotation/Form.vue
@@ -435,6 +449,7 @@ export function calculateProjectAmount(
   assertPrecision(revenue, 16, 2, '项目总额');
   const factor = discountFactor ?? new D(10);
   assertRange(factor, '0', '10', '项目优惠折扣');
+  assertPrecision(factor, 3, 2, '项目优惠折扣');
   return revenue.mul(factor).div(10).toDecimalPlaces(2, ROUND);
 }
 
@@ -473,7 +488,12 @@ export function formatMoney(value: any): string {
 }
 ~~~
 
-如果现有数据使用大于 10 的项目折数或大于 100 的税率，先确定那是否是输入错误或不同业务含义；不要为绕过报错随意删除范围规则。
+项目 discountPct 为 Decimal(5,2)，必须拒绝超过两位小数的折数。例：10000×8.123÷10=8123，但数据库将折数存为 8.12 后只能解释为 8120。不能用未规范化输入计算、再让数据库独立舍入。
+
+如果现有数据使用大于 10 的项目折数或大于 100 的税率，先确定是否是输入错误或不同业务含义；不要为绕过报错随意删除范围规则。历史单据不走新增规则强行纠正。
+
+同样，导入预览使用本计算器，不能让精度不合格的行在预览中通过后到确认时才被数据库舍入。
+
 
 ### 1.3 修改 payload.ts：只规范模型日期字段
 
@@ -710,7 +730,9 @@ private async syncContacts(
 }
 ~~~
 
-第一阶段没有新联系人关系表，引用检查基于原有 contactIds。它修复当前 ID 被重建的问题；如果项目与客户并发编辑频繁，附录关联表是更可靠的最终方案。
+第一阶段检查基于 Int[]，修复“修改电话导致 ID 重建”，但不是数据库级引用完整性保证。例如项目事务先验证联系人存在，另一个事务删除联系人，前者随后写入数组，仍可能留下失效 ID。
+
+若要求所有并发场景都保持引用有效，应把附录 A 与联系人修改同组实施，以外键兜底，而不是因当前用户少就宣称数组方案已经彻底解决。附录 A 保留旧数组是兼容手段，关系表才承担引用约束。
 
 ### 2.4 修改 create()
 
@@ -1267,6 +1289,124 @@ import {
 
 继续保留原 sanitize、PdfService 和 renderPdf import。
 
+
+### 4.1.1 在 money.ts 末尾追加计价比较与元数据工具
+
+这些函数只做值比较或构建非计价更新，不会调用新公式重算旧金额。lines 数组仍表示完整明细列表，不是单行的局部 patch。
+
+~~~ts
+function comparableDecimal(value: any, fallback = '0'): string {
+  return (nullableDecimal(value, '计价字段') ??
+    new Prisma.Decimal(fallback)).toString();
+}
+
+export function sameMoneyValue(left: any, right: any): boolean {
+  return comparableDecimal(left) === comparableDecimal(right);
+}
+
+export function sameSalesPricing(left: any[], right: any[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((line, index) => {
+    const old = right[index];
+    return ['quantity', 'unitPrice', 'discount', 'taxRate'].every(
+      (field) => sameMoneyValue(line[field], old[field]),
+    ) && String(line.invoiceType ?? '') === String(old.invoiceType ?? '');
+  });
+}
+
+export function assertLegacyPricingStable(
+  proposed: any[],
+  stored: any[],
+): void {
+  const fields = ['pricejy', 'concessions', 'moneyAfterConcessions'];
+  for (const [index, line] of proposed.entries()) {
+    for (const field of fields) {
+      if (line[field] !== undefined &&
+          !sameMoneyValue(line[field], stored[index]?.[field])) {
+        throw new BadRequestException(
+          field + '属于含义尚未确认的旧计价字段，不支持普通修改',
+        );
+      }
+    }
+  }
+}
+
+export function assertRepriceSupported(lines: any[]): void {
+  for (const line of lines) {
+    for (const field of [
+      'pricejy', 'concessions', 'moneyAfterConcessions',
+    ]) {
+      if (!sameMoneyValue(line[field], 0)) {
+        throw new BadRequestException(
+          '单据含非零旧计价字段 ' + field +
+          '，需先确认其业务含义，不能自动重新核算',
+        );
+      }
+    }
+  }
+}
+
+export function guardConfirmedDocument(
+  existing: any,
+  update: any,
+  pricingChanged: boolean,
+): void {
+  if (existing.approvalState === 'draft') return;
+  const stateChanged = update.approvalState !== undefined &&
+    update.approvalState !== existing.approvalState;
+  const currencyChanged = update.currencyCode !== undefined &&
+    update.currencyCode !== existing.currencyCode;
+  if (pricingChanged || stateChanged || currencyChanged) {
+    throw new BadRequestException(
+      '非草稿单据不能通过普通编辑修改计价、币种或状态；请使用另行定义的变更流程',
+    );
+  }
+}
+
+export function salesLineMetadata(
+  input: any,
+  sort: number,
+  type: 'quotation' | 'contract',
+) {
+  const data: any = { sort };
+  if (input.productName !== undefined) {
+    data.productName = requiredText(input.productName, '商品名称');
+  }
+  for (const field of [
+    'intro', 'zdy1', 'zdy2', 'zdy3', 'zdy4', 'zdy5', 'zdy6',
+  ]) {
+    if (input[field] !== undefined) data[field] = input[field];
+  }
+  if (type === 'quotation' && input.validDate !== undefined) {
+    data.validDate = nullableDate(input.validDate, '有效日期');
+  }
+  if (type === 'contract') {
+    if (input.deliveryDate !== undefined) {
+      data.deliveryDate = nullableDate(input.deliveryDate, '交付日期');
+    }
+    for (const field of ['deliveryMode', 'zdy2435']) {
+      if (input[field] !== undefined) data[field] = input[field];
+    }
+  }
+  return data;
+}
+~~~
+
+money.ts 顶部 business-values import 增加 nullableDate。第 4.1 节两个 Service 的 money import 中增加：
+
+~~~ts
+import {
+  sameMoneyValue,
+  sameSalesPricing,
+  assertLegacyPricingStable,
+  assertRepriceSupported,
+  guardConfirmedDocument,
+  salesLineMetadata,
+} from '../../common/utils/money';
+~~~
+
+可以与已有 money import 合并，避免重复导入。比较时 null/零在数值含义上视为相同，但不会因此自动改写数据库原值。
+
 ### 4.2 quotation.service.ts 替换 fixLine()
 
 ~~~ts
@@ -1287,6 +1427,7 @@ private fixLine(line: any, sort = 0) {
 
 不能将 moneyAfterTax 写入 SalesQuotationLine，该字段只在合同明细中存在，所以显式移除。
 
+
 ### 4.3 quotation.service.ts 新增 buildQuotationData()
 
 ~~~ts
@@ -1305,21 +1446,25 @@ private buildQuotationData(body: any) {
   if (data.date === null) {
     throw new BadRequestException('报价日期不能为空');
   }
-  const rows = optionalArray(lines, '报价明细');
-  const lineData = rows?.map((line, sort) =>
-    this.fixLine(line, sort),
-  );
-  return { data, lineData };
+  return { data, rows: optionalArray(lines, '报价明细') };
 }
 ~~~
 
-第一阶段 amountTotal 明确定义为税后明细金额之和；旧 discountType/discountValue 不参与整单再次打折。当前页面没有该整单优惠功能。若你的数据曾使用该功能，先保留其历史记录，不自动重算已确认报价；后续须在确认其原含义后单独实现整单优惠。
+这里返回原始业务输入 rows，不提前调用 fixLine。旧明细可能采用历史规则，只有确定需要且允许重新核算后才调用新公式。
+
+旧 discountType/discountValue 的整单优惠含义未确认：新单不接受非零整单优惠，存量单普通编辑保留原值，修改这些字段需先定义对应规则；不能一边保存非零优惠一边在总额中忽略。
+
 
 ### 4.4 quotation.service.ts 整体替换 create() 和 update()
 
 ~~~ts
 async create(body: any, user: any) {
-  const { data, lineData } = this.buildQuotationData(body);
+  const { data, rows } = this.buildQuotationData(body);
+  if (!sameMoneyValue(data.discountValue, 0)) {
+    throw new BadRequestException('新报价暂不支持未定义的整单优惠');
+  }
+  assertRepriceSupported(rows ?? []);
+  const lineData = rows?.map((line, sort) => this.fixLine(line, sort));
   data.title = requiredText(data.title, '报价标题');
   data.customerName = requiredText(data.customerName, '报价客户');
   data.code = data.code || (await this.nextCode());
@@ -1327,9 +1472,7 @@ async create(body: any, user: any) {
   data.createdById = user.id;
   data.deptId = user.deptId ?? data.deptId;
   data.amountTotal = sumAmounts(lineData ?? []);
-  if (lineData !== undefined) {
-    data.lines = { create: lineData };
-  }
+  if (lineData !== undefined) data.lines = { create: lineData };
   return this.prisma.salesQuotation.create({
     data,
     include: { lines: true },
@@ -1337,7 +1480,7 @@ async create(body: any, user: any) {
 }
 
 async update(id: number, body: any, user: any) {
-  const { data, lineData } = this.buildQuotationData(body);
+  const { data, rows } = this.buildQuotationData(body);
   delete data.code;
   return this.prisma.$transaction(async (tx) => {
     const locked = await tx.$queryRaw<Array<{ id: number }>>`
@@ -1345,15 +1488,46 @@ async update(id: number, body: any, user: any) {
       WHERE id = ${id}
       FOR UPDATE
     `;
-    if (!locked.length) {
-      throw new NotFoundException('报价单不存在');
+    if (!locked.length) throw new NotFoundException('报价单不存在');
+    const existing = await tx.salesQuotation.findUniqueOrThrow({
+      where: { id },
+      include: {
+        lines: { orderBy: [{ sort: 'asc' }, { id: 'asc' }] },
+      },
+    });
+    if ((data.discountValue !== undefined &&
+         !sameMoneyValue(data.discountValue, existing.discountValue)) ||
+        (data.discountType !== undefined &&
+         String(data.discountType ?? '') !==
+         String(existing.discountType ?? ''))) {
+      throw new BadRequestException('旧整单优惠字段不能通过普通编辑修改');
     }
-    if (lineData !== undefined) {
-      data.amountTotal = sumAmounts(lineData);
-      await tx.salesQuotationLine.deleteMany({
-        where: { quotationId: id },
-      });
-      data.lines = { create: lineData };
+    delete data.discountValue;
+    delete data.discountType;
+    const pricingChanged = rows !== undefined &&
+      !sameSalesPricing(rows, existing.lines);
+    guardConfirmedDocument(existing, data, pricingChanged);
+    if (rows !== undefined) {
+      assertLegacyPricingStable(rows, existing.lines);
+      if (pricingChanged) {
+        if (!sameMoneyValue(existing.discountValue, 0)) {
+          throw new BadRequestException('存在历史整单优惠，暂不能自动核算');
+        }
+        assertRepriceSupported(existing.lines);
+        assertRepriceSupported(rows);
+        const lineData = rows.map((line, sort) => this.fixLine(line, sort));
+        data.amountTotal = sumAmounts(lineData);
+        await tx.salesQuotationLine.deleteMany({ where: { quotationId: id } });
+        data.lines = { create: lineData };
+      } else {
+        // 保留原 ID 及全部金额，只更新不参与计价的字段。
+        for (const [sort, line] of rows.entries()) {
+          await tx.salesQuotationLine.update({
+            where: { id: existing.lines[sort].id },
+            data: salesLineMetadata(line, sort, 'quotation'),
+          });
+        }
+      }
     }
     return tx.salesQuotation.update({
       where: { id },
@@ -1370,7 +1544,9 @@ async update(id: number, body: any, user: any) {
 }
 ~~~
 
-为什么创建不额外套事务：Prisma 主表加 nested create 本身是原子写入；更新中的独立 deleteMany 必须和 update 处于同一事务。
+创建的 nested create 本身是原子写入。更新中涉及独立 deleteMany、元数据更新和主表更新，全部在同一事务中。
+
+历史单据计价未变时，amountTotal 即使为空或与新公式不同也不在普通编辑中回填；仅在 PDF 展示需要时提供显示回退，不能把显示回退写回历史数据。
 
 ### 4.5 contract.service.ts 替换 cleanDates()
 
@@ -1440,7 +1616,7 @@ private buildContractData(body: any) {
   const plans = optionalArray(paymentPlans, '付款计划');
   return {
     data,
-    lineData: rows?.map((line, sort) => this.fixLine(line, sort)),
+    rows,
     plans,
   };
 }
@@ -1487,7 +1663,7 @@ private validatePlanTotal(
   plans: Array<{ amount: any }>,
 ) {
   // 当前表单提交时传 approved。
-  if (state !== 'approved') return;
+  if (!REQUIRE_COMPLETE_PAYMENT_PLAN_ON_APPROVAL || state !== 'approved') return;
   const total = plans.reduce(
     (sum, plan) => sum.plus(plan.amount),
     new Prisma.Decimal(0),
@@ -1553,40 +1729,40 @@ private async syncPaymentPlans(
 }
 ~~~
 
-付款计划的 isReceived 和 receivedAt 由数据库原值保留，不让普通合同编辑把收款状态重置。第一阶段不新增收款动作；如果现有其他接口负责收款，继续通过原流程处理。
+contract.service.ts 类外新增以下常量，默认必须为 false：
+
+~~~ts
+const REQUIRE_COMPLETE_PAYMENT_PLAN_ON_APPROVAL = false;
+~~~
+
+付款计划合计等于最终应收金额是可选流程规则，不是本次缺陷修复的必选条件。只有业务明确采用、并梳理历史计划后才能改为 true；开启后会新增提交门槛，不能把它当成无行为变化的修复。
+
+isReceived 和 receivedAt 由数据库原值保留，不让普通合同编辑重置收款状态。第一阶段不新增收款动作；若现有其他接口负责收款，继续原流程。
+
 
 ### 4.8 替换合同 create() 和 update()
 
 ~~~ts
 async create(body: any, user: any) {
-  const { data, lineData, plans } = this.buildContractData(body);
+  const { data, rows, plans } = this.buildContractData(body);
+  assertRepriceSupported(rows ?? []);
+  const lineData = rows?.map((line, sort) => this.fixLine(line, sort));
   data.title = requiredText(data.title, '合同标题');
   data.customerName = requiredText(data.customerName, '合同客户');
   data.code = data.code || (await this.nextCode());
-  data.signDate =
-    data.signDate ?? dateOnly(businessToday(), '签订日期');
+  data.signDate = data.signDate ?? dateOnly(businessToday(), '签订日期');
   data.createdById = user.id;
   data.deptId = user.deptId ?? data.deptId;
-
   const total = sumAmounts(lineData ?? []);
   data.amountTotal = total;
-  data.amountFinal =
-    this.calculateContractFinal(total, data.discountValue);
-
+  data.amountFinal = this.calculateContractFinal(total, data.discountValue);
   const planData = (plans ?? []).map((plan, index) =>
-    this.buildPlan(plan, index),
-  );
+    this.buildPlan(plan, index));
   this.validatePlanTotal(
-    data.approvalState ?? 'draft',
-    data.amountFinal,
-    planData,
+    data.approvalState ?? 'draft', data.amountFinal, planData,
   );
-  if (lineData !== undefined) {
-    data.lines = { create: lineData };
-  }
-  if (plans !== undefined) {
-    data.paymentPlans = { create: planData };
-  }
+  if (lineData !== undefined) data.lines = { create: lineData };
+  if (plans !== undefined) data.paymentPlans = { create: planData };
   return this.prisma.salesContract.create({
     data,
     include: { lines: true, paymentPlans: true },
@@ -1594,7 +1770,7 @@ async create(body: any, user: any) {
 }
 
 async update(id: number, body: any, user: any) {
-  const { data, lineData, plans } = this.buildContractData(body);
+  const { data, rows, plans } = this.buildContractData(body);
   delete data.code;
   return this.prisma.$transaction(async (tx) => {
     const locked = await tx.$queryRaw<Array<{ id: number }>>`
@@ -1602,55 +1778,73 @@ async update(id: number, body: any, user: any) {
       WHERE id = ${id}
       FOR UPDATE
     `;
-    if (!locked.length) {
-      throw new NotFoundException('合同不存在');
-    }
+    if (!locked.length) throw new NotFoundException('合同不存在');
     const existing = await tx.salesContract.findUniqueOrThrow({
       where: { id },
-      include: { lines: true, paymentPlans: true },
+      include: {
+        lines: { orderBy: [{ sort: 'asc' }, { id: 'asc' }] },
+        paymentPlans: true,
+      },
     });
+    const linesChanged = rows !== undefined &&
+      !sameSalesPricing(rows, existing.lines);
+    const discountChanged = data.discountValue !== undefined &&
+      !sameMoneyValue(data.discountValue, existing.discountValue);
+    const pricingChanged = linesChanged || discountChanged;
+    guardConfirmedDocument(existing, data, pricingChanged);
+    if (!discountChanged) delete data.discountValue;
 
-    const total = lineData !== undefined
-      ? sumAmounts(lineData)
-      : existing.amountTotal ?? sumAmounts(existing.lines);
-    const discount = data.discountValue !== undefined
-      ? data.discountValue
-      : existing.discountValue;
-    const moneyChanged =
-      lineData !== undefined || data.discountValue !== undefined;
-    const finalAmount = moneyChanged
-      ? this.calculateContractFinal(total, discount)
-      : existing.amountFinal ??
-        this.calculateContractFinal(total, discount);
-    if (moneyChanged || existing.amountTotal == null) {
+    if (rows !== undefined) {
+      assertLegacyPricingStable(rows, existing.lines);
+    }
+    // 历史普通编辑保留所有金额；不根据字段“存在”决定重算。
+    let effectiveFinal: Prisma.Decimal | null = existing.amountFinal;
+    if (pricingChanged) {
+      const effectiveRows = rows ?? existing.lines;
+      assertRepriceSupported(existing.lines);
+      assertRepriceSupported(effectiveRows);
+      const lineData = effectiveRows.map((line, sort) =>
+        this.fixLine(line, sort));
+      const total = sumAmounts(lineData);
+      const discount = discountChanged
+        ? data.discountValue : existing.discountValue;
+      effectiveFinal = this.calculateContractFinal(total, discount);
       data.amountTotal = total;
-      data.amountFinal = finalAmount;
+      data.amountFinal = effectiveFinal;
+      await tx.salesContractLine.deleteMany({ where: { contractId: id } });
+      data.lines = { create: lineData };
+    } else if (rows !== undefined) {
+      for (const [sort, line] of rows.entries()) {
+        await tx.salesContractLine.update({
+          where: { id: existing.lines[sort].id },
+          data: salesLineMetadata(line, sort, 'contract'),
+        });
+      }
     }
 
-    const effectivePlans = plans !== undefined
-      ? plans.map((plan, index) => this.buildPlan(plan, index))
-      : existing.paymentPlans;
-    if (moneyChanged || plans !== undefined ||
-        data.approvalState !== undefined) {
+    const enteringApproved = existing.approvalState !== 'approved' &&
+      data.approvalState === 'approved';
+    if (REQUIRE_COMPLETE_PAYMENT_PLAN_ON_APPROVAL &&
+        (pricingChanged || plans !== undefined || enteringApproved)) {
+      if (effectiveFinal == null) {
+        throw new BadRequestException(
+          '历史合同应收金额未知，不能自动推导后执行严格付款计划校验',
+        );
+      }
+      const effectivePlans = plans !== undefined
+        ? plans.map((plan, index) => this.buildPlan(plan, index))
+        : existing.paymentPlans;
       this.validatePlanTotal(
         data.approvalState ?? existing.approvalState,
-        finalAmount,
+        effectiveFinal,
         effectivePlans,
       );
-    }
-
-    if (lineData !== undefined) {
-      await tx.salesContractLine.deleteMany({
-        where: { contractId: id },
-      });
-      data.lines = { create: lineData };
     }
     if (plans !== undefined) {
       await this.syncPaymentPlans(tx, id, plans);
     }
     return tx.salesContract.update({
-      where: { id },
-      data,
+      where: { id }, data,
       include: {
         lines: { orderBy: [{ sort: 'asc' }, { id: 'asc' }] },
         paymentPlans: { orderBy: [{ seq: 'asc' }, { id: 'asc' }] },
@@ -1664,7 +1858,7 @@ async update(id: number, body: any, user: any) {
 }
 ~~~
 
-已收款合同金额如果变化会触发回款合计规则，避免无提示地留下不一致账期。后续要支持合同变更单时另建明确业务动作。
+本版普通编辑不会清空或回填历史金额，也不会让“存草稿”把已确认合同解锁。需要合同变更单或重新核算时，应另定义明确操作；本手册不添加一个绕过历史保护的隐式开关。
 
 ### 4.9 PDF 金额统一
 
@@ -1705,7 +1899,35 @@ amountTotal: this.fmtMoney(
 
 ### 4.10 前端明细与付款计划
 
-quotation/Form.vue 的明细仍可剥离 ID，因为本阶段明细采用整单事务替换。
+两份表单仍提交完整且有序的明细数组，可以剥离明细 ID。后端先按计价输入判断是否变化；未变时使用数据库原行 ID 更新元数据，计价变更只允许草稿事务核算。
+
+两份表单 <script setup> 中增加：
+
+~~~ts
+const persistedApprovalState = ref('draft');
+~~~
+
+loadDetail() 取得 d 后增加：
+
+~~~ts
+persistedApprovalState.value = d.approvalState;
+~~~
+
+模板中原“存草稿/提交”两个按钮替换为：
+
+~~~vue
+<el-button
+  v-if="!isEdit || persistedApprovalState === 'draft'"
+  @click="save('draft')"
+>存草稿</el-button>
+<el-button
+  type="primary"
+  @click="save(isEdit && persistedApprovalState !== 'draft'
+    ? persistedApprovalState : 'approved')"
+>{{ isEdit && persistedApprovalState !== 'draft' ? '保存' : '提交' }}</el-button>
+~~~
+
+保留外围 !isView 条件。这样非草稿普通编辑继续提交原状态，不让原“存草稿”按钮误改状态；后端仍按数据库状态作最终判断。
 
 contract/Form.vue 的 loadDetail() 中，将 paymentPlans 映射替换为：
 
@@ -2548,6 +2770,7 @@ status        String    @default("draft")
 version       Int       @default(0)
 submittedAt   DateTime?
 daySummaries  Json?
+legacySnapshotAt DateTime?
 revisions     CrmSalesScheduleRevision[]
 ~~~
 
@@ -2562,7 +2785,10 @@ model CrmSalesScheduleRevision {
   summaryText   String?
   leaderComment String?
   daysSnapshot  Json
-  submittedAt   DateTime @default(now())
+  kind          String   @default("submitted")
+  submittedAt   DateTime?
+  sourceUpdatedAt DateTime?
+  recordedAt    DateTime @default(now())
 
   schedule CrmSalesSchedule @relation(
     fields: [scheduleId],
@@ -2574,7 +2800,7 @@ model CrmSalesScheduleRevision {
 }
 ~~~
 
-第一阶段只有 draft/submitted；提交版本表承担历史保留，不另外引入还没有明确动作的 archived 状态。
+第一阶段状态为 draft、submitted、legacy_snapshot。legacy_snapshot 仅表示旧程序保存过快照，不代表用户正式提交。旧快照的源记录更新时间写 sourceUpdatedAt/legacySnapshotAt，submittedAt 保持 null；recordedAt 是版本记录写入时间。新提交才有真实 submittedAt。
 
 ### 8.2 sales-schedule.service.ts import
 
@@ -2630,12 +2856,12 @@ async getByWeek(ownerId: number, weekStart: Date) {
   const storedSnapshot = row?.daysSnapshot;
   let days: any[];
 
-  if (row?.status === 'submitted') {
+  if (row?.status === 'submitted' || row?.status === 'legacy_snapshot') {
     if (!Array.isArray(storedSnapshot)) {
-      throw new BadRequestException('已提交日程缺少快照，需要修复该记录');
+      throw new BadRequestException('历史或已提交日程缺少快照，需要修复该记录');
     }
     days = storedSnapshot as any[];
-  } else {
+  } else if (!row || row.status === 'draft') {
     days = await this.buildDaysArray(ownerId, normalized, start);
     const summaries = row?.daySummaries;
     const byDate = summaries &&
@@ -2648,6 +2874,8 @@ async getByWeek(ownerId: number, weekStart: Date) {
       daySummary: typeof byDate[day.date] === 'string'
         ? byDate[day.date] : '',
     }));
+  } else {
+    throw new BadRequestException('日程状态不合法，不能自动按草稿读取');
   }
   return {
     id: row?.id ?? null,
@@ -2657,6 +2885,7 @@ async getByWeek(ownerId: number, weekStart: Date) {
     status: row?.status ?? 'draft',
     version: row?.version ?? 0,
     submittedAt: row?.submittedAt ?? null,
+    legacySnapshotAt: row?.legacySnapshotAt ?? null,
     planText: row?.planText ?? '',
     summaryText: row?.summaryText ?? '',
     leaderComment: row?.leaderComment ?? '',
@@ -2671,8 +2900,9 @@ async getByWeek(ownerId: number, weekStart: Date) {
 private readScheduleInput(body: any) {
   const ownerId = positiveInt(body.ownerId, '日程人员');
   const weekStart = normalizeWeekStart(body.weekStart);
-  const version = Number(body.version);
-  if (!Number.isSafeInteger(version) || version < 0) {
+  const version = body.version;
+  if (typeof version !== 'number' ||
+      !Number.isSafeInteger(version) || version < 0) {
     throw new BadRequestException('必须提交读取时的日程版本号');
   }
   const data: any = {};
@@ -2718,30 +2948,58 @@ private async lockSchedule(
   ownerId: number,
   weekStart: Date,
 ) {
-  const created = await tx.crmSalesSchedule.upsert({
-    where: { ownerId_weekStart: { ownerId, weekStart } },
-    create: { ownerId, weekStart },
-    update: {},
-  });
-  await tx.$queryRaw`
+  // 避免空 update 的 upsert 在首次并发创建时依赖客户端实现。
+  await tx.$executeRaw`
+    INSERT INTO "CrmSalesSchedule" ("ownerId", "weekStart", "updatedAt")
+    VALUES (${ownerId}, ${weekStart}, CURRENT_TIMESTAMP)
+    ON CONFLICT ("ownerId", "weekStart") DO NOTHING
+  `;
+  const locked = await tx.$queryRaw<Array<{ id: number }>>`
     SELECT id FROM "CrmSalesSchedule"
-    WHERE id = ${created.id}
+    WHERE "ownerId" = ${ownerId} AND "weekStart" = ${weekStart}
     FOR UPDATE
   `;
+  if (!locked.length) throw new NotFoundException('日程不存在');
   return tx.crmSalesSchedule.findUniqueOrThrow({
-    where: { id: created.id },
+    where: { id: locked[0].id },
   });
+}
+
+private async runScheduleTransaction<T>(
+  work: (tx: Prisma.TransactionClient) => Promise<T>,
+  isolationLevel: 'ReadCommitted' | 'RepeatableRead' = 'ReadCommitted',
+): Promise<T> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await this.prisma.$transaction(work, {
+        isolationLevel,
+        maxWait: 5000,
+        timeout: 10000,
+      });
+    } catch (error: any) {
+      const transactionConflict =
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2034';
+      if (!transactionConflict) throw error;
+      if (attempt === 2) {
+        throw new ConflictException('日程写入发生并发冲突，请重新读取');
+      }
+    }
+  }
+  throw new ConflictException('日程写入未完成，请重新读取');
 }
 ~~~
 
-这里 version 必须由前端读取后返回；不能固定写 0。行锁防止同周写入交叉，版本号防止旧页面覆盖后来保存的内容。
+version 必须由前端读取后以 JSON number 返回，不能固定为 0，也不接受 null/空串自动转零。行锁串行化同周写入，版本号识别旧页面。
+
+RepeatableRead 下并发写入可能先触发数据库 P2034，而不是进入手写版本判断；只对该已识别事务冲突最多尝试三次，其他错误原样抛出。重试事务只包含数据库读写，无外部副作用。重试后仍会重新比较版本，不允许用重试覆盖其他人的新数据。
 
 ### 8.6 替换 upsert()；新增 submit() 和 reopen()
 
 ~~~ts
 async upsert(body: any) {
   const input = this.readScheduleInput(body);
-  return this.prisma.$transaction(async (tx) => {
+  return this.runScheduleTransaction(async (tx) => {
     const row = await this.lockSchedule(
       tx, input.ownerId, input.weekStart,
     );
@@ -2760,7 +3018,7 @@ async upsert(body: any) {
 
 async submit(body: any) {
   const input = this.readScheduleInput(body);
-  return this.prisma.$transaction(async (tx) => {
+  return this.runScheduleTransaction(async (tx) => {
     const row = await this.lockSchedule(
       tx, input.ownerId, input.weekStart,
     );
@@ -2786,6 +3044,7 @@ async submit(body: any) {
       data: {
         scheduleId: row.id,
         revision: version,
+        kind: 'submitted',
         planText: merged.planText,
         summaryText: merged.summaryText,
         leaderComment: merged.leaderComment,
@@ -2803,20 +3062,20 @@ async submit(body: any) {
         daysSnapshot: snapshot,
       },
     });
-  }, { isolationLevel: 'RepeatableRead' });
+  }, 'RepeatableRead');
 }
 
 async reopen(body: any) {
   const input = this.readScheduleInput(body);
-  return this.prisma.$transaction(async (tx) => {
+  return this.runScheduleTransaction(async (tx) => {
     const row = await this.lockSchedule(
       tx, input.ownerId, input.weekStart,
     );
     if (row.version !== input.version) {
       throw new ConflictException('日程已被修改，请重新读取');
     }
-    if (row.status !== 'submitted') {
-      throw new BadRequestException('仅已提交日程可以重新打开');
+    if (row.status !== 'submitted' && row.status !== 'legacy_snapshot') {
+      throw new BadRequestException('仅旧版快照或已提交日程可以重新打开');
     }
     return tx.crmSalesSchedule.update({
       where: { id: row.id },
@@ -2846,7 +3105,7 @@ async revisions(ownerId: number, weekStart: Date) {
 }
 ~~~
 
-重新打开只改变状态，不删除旧 daysSnapshot 和 revision。草稿读取实时数据；再次提交会生成新版本。
+旧版快照和已提交日程都可重新打开；只改变状态，不删除旧 daysSnapshot、来源时间和 revision。草稿读取实时数据；再次提交会生成新版本。
 
 在 aggregateWeek 的两个 pushCell 对象中分别增加：
 
@@ -2937,7 +3196,7 @@ revisions: (weekStart: string, ownerId?: number) =>
 form 声明增加：
 
 ~~~ts
-status: 'draft' as 'draft' | 'submitted',
+status: 'draft' as 'draft' | 'submitted' | 'legacy_snapshot',
 version: 0,
 ~~~
 
@@ -3020,10 +3279,18 @@ await salesScheduleApi.save(schedulePayload());
 三个顶部文本框和当日总结 textarea 增加：
 
 ~~~vue
-:readonly="form.status === 'submitted'"
+:readonly="form.status !== 'draft'"
 ~~~
 
-这是配合业务状态的输入控制。后端同样执行状态规则，不能仅靠表单只读。
+旧版快照与已提交记录均只读，“重新打开草稿”动作同时支持两者。旧版快照只展示“旧版快照”，不能显示成“已提交”；可在顶部条件区补充：
+
+~~~vue
+<span v-if="form.status === 'legacy_snapshot'">
+  旧版快照（未确认正式提交）
+</span>
+~~~
+
+后端同样执行状态规则，不能仅靠表单只读。
 
 现有历史版本读取通过 revisions 接口完成；第一阶段无须另建整页历史浏览器，也不要删除版本记录。
 
@@ -3108,7 +3375,8 @@ ALTER TABLE "CrmSalesSchedule"
 ADD COLUMN "status" TEXT NOT NULL DEFAULT 'draft',
 ADD COLUMN "version" INTEGER NOT NULL DEFAULT 0,
 ADD COLUMN "submittedAt" TIMESTAMP(3),
-ADD COLUMN "daySummaries" JSONB;
+ADD COLUMN "daySummaries" JSONB,
+ADD COLUMN "legacySnapshotAt" TIMESTAMP(3);
 
 CREATE TABLE "CrmSalesScheduleRevision" (
   "id" SERIAL NOT NULL,
@@ -3118,7 +3386,10 @@ CREATE TABLE "CrmSalesScheduleRevision" (
   "summaryText" TEXT,
   "leaderComment" TEXT,
   "daysSnapshot" JSONB NOT NULL,
-  "submittedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "kind" TEXT NOT NULL DEFAULT 'submitted',
+  "submittedAt" TIMESTAMP(3),
+  "sourceUpdatedAt" TIMESTAMP(3),
+  "recordedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "CrmSalesScheduleRevision_pkey" PRIMARY KEY ("id"),
   CONSTRAINT "CrmSalesScheduleRevision_scheduleId_fkey"
     FOREIGN KEY ("scheduleId")
@@ -3129,21 +3400,22 @@ CREATE TABLE "CrmSalesScheduleRevision" (
 CREATE UNIQUE INDEX "CrmSalesScheduleRevision_scheduleId_revision_key"
 ON "CrmSalesScheduleRevision" ("scheduleId", "revision");
 
--- 旧快照完整保留，不因改成草稿实时聚合而丢失。
+-- 旧程序保存即生成快照，不能由快照推断真实提交。
 UPDATE "CrmSalesSchedule"
-SET "status" = 'submitted',
+SET "status" = 'legacy_snapshot',
     "version" = 1,
-    "submittedAt" = "updatedAt"
+    "legacySnapshotAt" = "updatedAt",
+    "submittedAt" = NULL
 WHERE jsonb_typeof("daysSnapshot") = 'array';
 
 INSERT INTO "CrmSalesScheduleRevision" (
-  "scheduleId", "revision", "planText", "summaryText",
-  "leaderComment", "daysSnapshot", "submittedAt"
+  "scheduleId", "revision", "kind", "planText", "summaryText",
+  "leaderComment", "daysSnapshot", "submittedAt", "sourceUpdatedAt"
 )
-SELECT id, 1, "planText", "summaryText",
-       "leaderComment", "daysSnapshot", "submittedAt"
+SELECT id, 1, 'legacy_snapshot', "planText", "summaryText",
+       "leaderComment", "daysSnapshot", NULL, "legacySnapshotAt"
 FROM "CrmSalesSchedule"
-WHERE "status" = 'submitted';
+WHERE "status" = 'legacy_snapshot';
 
 UPDATE "CrmSalesSchedule" AS s
 SET "daySummaries" = (
@@ -3157,7 +3429,9 @@ SET "daySummaries" = (
 WHERE jsonb_typeof(s."daysSnapshot") = 'array';
 ~~~
 
-schema.prisma 中 Revision 三个文本字段使用 String? 时默认 TEXT，与 SQL 一致。
+schema.prisma 中 Revision 三个文本字段使用 String? 时默认 TEXT，与 SQL 一致。kind 区分旧版快照与真实提交，submittedAt 可空；源更新时间和写入时间不能替代真实提交时间。
+
+这是首次实施本手册时的迁移定义。如果旧版迁移已经在某个数据库执行，不要编辑其已执行文件伪装成新历史；新增纠正迁移，并依据“真实 submit 接口是否已使用”的证据区分旧记录。不能仅用日期阈值猜测并批量清除真实提交时间。
 
 **顺序：** 先完成 schema.prisma 和迁移文件，再在你的开发数据库应用结构变更并重新生成 Prisma Client；随后使用新 Service 代码。不应使用旧客户端编译新模型方法。
 
@@ -3401,6 +3675,55 @@ take: 50,
 
 如果已有功能明确需要全量客户（如数据导入映射），它应使用批量编号查询，不复用这个候选接口。
 
+
+### 9.6 客户状态尚未持久化：停止无效排序，避免虚假标签
+
+这是原项目已有的不一致，不是本次新引入的状态流程。CrmCustomer 没有 submitStatus，而 CustomerService.buildCustomerOrderBy() 却返回该字段，当前列表还默认把缺失状态显示成“正式”。
+
+customer.service.ts 将：
+
+~~~ts
+case 'status': return { submitStatus: so };
+~~~
+
+替换为兼容旧请求的稳定回退：
+
+~~~ts
+case 'status': return { updatedAt: so };
+~~~
+
+frontend/src/views/sales/customer/List.vue 的 status 列配置中，把 sortable: true 改成 sortable: false。原 statusCell 替换：
+
+~~~vue
+<template #statusCell>
+  <el-tag type="info">未定义</el-tag>
+</template>
+~~~
+
+导出字段映射：
+
+~~~ts
+status: () => '未定义',
+~~~
+
+替换原按 r.submitStatus 推断“草稿/正式”的对应项。旧客户端若仍请求 status 排序，只回退到更新时间，不能生成不存在字段的数据库查询。
+
+customer/Form.vue 将：
+
+~~~ts
+ElMessage.success(status === 'draft' ? '已存草稿' : '已确认');
+~~~
+
+替换为：
+
+~~~ts
+ElMessage.success('客户资料已保存');
+~~~
+
+保留 save('draft') 的返回列表分支、save('active') 的编辑后留页分支，但将对应按钮文字“存草稿”改为“保存并返回”，“确认”改为“保存”。这里 draft/active 仅是旧函数的导航参数，不再宣称持久化业务状态。
+
+本修订没有增加客户状态列或确认动作。若后续需要客户草稿流程，必须另定状态字段、转换规则和旧数据语义。
+
 ## 10. 前端显式提交映射与业务日期
 
 ### 10.1 新增 frontend/src/utils/business-date.ts
@@ -3586,9 +3909,9 @@ export function buildFormPayload(model: Model, form: any) {
 }
 ~~~
 
-本函数只排除数据库系统字段和后端计算的派生字段，不改变当前联系人名称快照、附件 JSON 或跟进编辑器的数据结构。
+本函数显式选取当前可编辑字段，排除系统字段和派生金额；这不等于完整业务 DTO 已覆盖所有模块。跟进编辑器仍按原结构调用独立接口。非草稿计价未变时，后端使用原金额和原名称快照，不因整单回传而刷新。
 
-当前 Customer 模型没有 submitStatus 字段，现有表单提交该值会被 scrub 丢弃。本文不凭空增加一个未定义的客户状态流程，所以客户映射没有提交该字段。这是原项目已有的接口/模型不一致：若业务确实需要客户草稿/确认，应另行定义状态列和旧数据语义，不能把本手册的客户数据修复误认为同时完成了客户状态功能。
+当前 Customer 模型没有 submitStatus 字段，现有表单提交该值会被 scrub 丢弃。本文不凭空增加一个未定义的客户状态流程，所以客户映射没有提交该字段。这是原项目已有的接口/模型不一致。第 9.6 节同时修正无效排序、缺失状态的虚假标签和成功提示；若业务需要草稿/确认，另行定义真实状态列和旧数据语义，不能把本次数据修复误认为完成了客户状态流程。
 
 ### 10.3 四份 Form.vue 增加 import
 
@@ -3783,7 +4106,10 @@ fmtLocalDate 无调用后删除，不再混用浏览器本地时区。
 | 补录较早跟进 | 最后跟进日期不倒退 |
 | 删除最近跟进 | 最后跟进日期变成剩余记录最大值 |
 | 报价明细更新失败 | 原主表和明细一起保留 |
-| 普通编辑合同付款计划 | 已收款计划的 ID 与收款状态保留 |
+| 普通编辑合同付款计划 | 已收款计划的 ID 与收款状态保留；不默认新增提交合计门槛 |
+| 已确认报价/合同只改说明 | 保留原明细 ID、全部计价结果和主表金额 |
+| 项目折数输入三位小数 | 明确拒绝，不能由数据库另行舍入 |
+| 旧日程快照迁移 | 标记 legacy_snapshot，不伪造提交时间 |
 | 预览 Excel | 不分配项目正式编号 |
 | 确认 Excel 中某行失败 | 整批回滚 |
 | 已完成批次重复确认 | 返回原项目结果，不再次创建 |
@@ -3824,10 +4150,10 @@ npm run build
 3. 历史联系人 ID 已丢失的数据不能通过本文自动复原。
 4. 本文没有自动重算已确认历史金额。
 5. 旧创建人缺失保持未知，不能用当前负责人猜测。
-6. 第 4 节新增合同批准时付款计划金额校验。现有表单允许零计划直接提交，修改后需要填写完整付款计划或先存草稿。这是本文选择的业务规则。
+6. 第 4 节付款计划严格合计规则默认关闭；只有明确采用后才能开启，不能作为无业务变化的必选修复。
 7. 旧 pricejy、concessions、moneyAfterConcessions 等字段仍保留兼容数据；没有确认含义前不将它们加入新的金额公式。
 8. 第 7、8 节模型变更、客户端生成与调用代码必须同时完成，不能只粘贴 Service。
-9. 本次客户状态未被重新定义；现有客户 submitStatus 问题不能靠字段清洗修复。
+9. 本次客户状态未被重新定义；第 9.6 节停止不存在字段的排序，并把缺失状态标为未定义，不把它默认显示为正式。
 
 
 ## 附录 A. 第二阶段：项目联系人关系表
@@ -3980,7 +4306,7 @@ if (linked) {
 
 ### A.5 什么时候移除旧 contactIds
 
-只有所有入口都改为从 projectContacts 读取后才删除旧字段。本文的第二阶段仍保留它，便于旧前端兼容，不给出一个会使第一阶段 resolveCustomer 立即失效的删除操作。
+只有所有入口都改为从 projectContacts 读取后才删除旧字段；需要并发引用保证时，关系表及双写不能无限期推迟。本文的第二阶段仍保留它，便于旧前端兼容，不给出一个会使第一阶段 resolveCustomer 立即失效的删除操作。
 
 如果之后彻底移除数组，必须同时修改：
 
@@ -4073,84 +4399,103 @@ WHERE c."quotationId" IS NOT NULL AND q.id IS NULL;
 
 新增外键前先处理这些引用。不能以“迁移能执行”为理由删除历史单据的业务线索。
 
+
 ### B.3 关联客户与项目的公共解析
 
-新增：
-backend/src/common/utils/sales-links.ts
+新增 backend/src/common/utils/sales-links.ts：
 
 ~~~ts
 import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { nullableInt } from './business-values';
+import { nullableInt, positiveInt } from './business-values';
 
 export async function resolveSalesLinks(
   tx: Prisma.TransactionClient,
   data: any,
   existing?: any,
 ) {
-  let customerId = data.customerId !== undefined
-    ? nullableInt(data.customerId, '客户 ID')
-    : existing?.customerId;
-
-  if (data.customerId !== undefined) {
-    if (customerId == null) {
-      data.customerId = null;
-      // 客户名称快照仍保留，允许历史单据暂时无关系。
-    } else {
-      const customer = await tx.crmCustomer.findUnique({
-        where: { id: customerId },
-        select: { id: true, name: true },
-      });
-      if (!customer) throw new BadRequestException('客户不存在');
-      data.customerId = customer.id;
-      data.customerName = customer.name;
-    }
+  const hasCustomer = data.customerId !== undefined;
+  const oldCustomerId = existing?.customerId ?? null;
+  let customerId: number | null = oldCustomerId;
+  if (hasCustomer) {
+    customerId = nullableInt(data.customerId, '客户 ID') ?? null;
+    if (customerId !== null) positiveInt(customerId, '客户 ID');
+    data.customerId = customerId;
+  }
+  const customerChanged = hasCustomer && customerId !== oldCustomerId;
+  if (customerId !== null && (!existing || customerChanged)) {
+    const customer = await tx.crmCustomer.findUnique({
+      where: { id: customerId },
+      select: { id: true, name: true },
+    });
+    if (!customer) throw new BadRequestException('客户不存在');
+    data.customerName = customer.name;
+  } else if (existing && oldCustomerId !== null && !customerChanged) {
+    // 整单回传相同 ID，不是重选客户；保留数据库原名称快照。
+    delete data.customerName;
+  }
+  if (existing && existing.approvalState !== 'draft' && customerChanged) {
+    throw new BadRequestException('非草稿单据不能通过普通编辑重新绑定客户');
   }
 
-  let projectId = data.opportunityId !== undefined
-    ? nullableInt(data.opportunityId, '项目 ID')
-    : existing?.opportunityId;
-
-  if (data.opportunityCode !== undefined) {
+  let project: { id: number; code: string; customerId: number | null } | null = null;
+  let projectId: number | null = existing?.opportunityId ?? null;
+  if (data.opportunityId !== undefined) {
+    // ID 为权威输入；显式 null 同时清空旧编号。
+    projectId = nullableInt(data.opportunityId, '项目 ID') ?? null;
+    data.opportunityId = projectId;
+    if (projectId === null) {
+      data.opportunityCode = null;
+    } else {
+      positiveInt(projectId, '项目 ID');
+      project = await tx.crmOpportunity.findUnique({
+        where: { id: projectId },
+        select: { id: true, code: true, customerId: true },
+      });
+      if (!project) throw new BadRequestException('项目不存在');
+      const suppliedCode = String(data.opportunityCode ?? '').trim();
+      if (suppliedCode && suppliedCode !== project.code) {
+        throw new BadRequestException('项目 ID 与编号不一致');
+      }
+      data.opportunityCode = project.code;
+    }
+  } else if (data.opportunityCode !== undefined) {
     const code = String(data.opportunityCode ?? '').trim();
     if (!code) {
       projectId = null;
       data.opportunityId = null;
       data.opportunityCode = null;
     } else {
-      const project = await tx.crmOpportunity.findUnique({
+      project = await tx.crmOpportunity.findUnique({
         where: { code },
         select: { id: true, code: true, customerId: true },
       });
       if (!project) throw new BadRequestException('项目编号不存在');
-      if (data.opportunityId !== undefined &&
-          projectId != null && projectId !== project.id) {
-        throw new BadRequestException('项目 ID 与编号不一致');
-      }
       projectId = project.id;
       data.opportunityId = project.id;
       data.opportunityCode = project.code;
-      if (customerId != null && project.customerId != null &&
-          customerId !== project.customerId) {
-        throw new BadRequestException('项目与单据客户不一致');
-      }
     }
-  } else if (projectId != null) {
-    const project = await tx.crmOpportunity.findUnique({
+  } else if (projectId !== null && customerChanged) {
+    project = await tx.crmOpportunity.findUnique({
       where: { id: projectId },
       select: { id: true, code: true, customerId: true },
     });
     if (!project) throw new BadRequestException('项目不存在');
-    data.opportunityCode = project.code;
-    if (customerId != null && project.customerId != null &&
-        customerId !== project.customerId) {
-      throw new BadRequestException('项目与单据客户不一致');
-    }
+  }
+  if (existing && existing.approvalState !== 'draft' &&
+      projectId !== (existing.opportunityId ?? null)) {
+    throw new BadRequestException('非草稿单据不能通过普通编辑重新绑定项目');
+  }
+  if (project && customerId !== null && project.customerId !== null &&
+      customerId !== project.customerId) {
+    throw new BadRequestException('项目与单据客户不一致');
   }
 }
 ~~~
 
-只在显式修改客户关系时刷新客户名称快照；修改合同说明不自动改写历史客户名称。
+新建或草稿真正更换客户时记录名称快照；已有绑定的 ID 相同或没有提交 ID 时，不刷新快照。解除绑定保留名称文本作为历史线索。新客户、项目均必须存在；普通编辑不提供隐式“刷新历史名称”动作。
+
+本工具不承担报价转合同业务校验；quotationId 与来源报价、客户、项目的一致性，需要在明确的转合同操作中定义，不能把“外键存在”当成该业务已经完成。
 
 ### B.4 Service 接入点
 
@@ -4162,14 +4507,7 @@ update() 中读取原主表后、主表 update 前调用：
 await resolveSalesLinks(tx, data, existing);
 ~~~
 
-报价 update() 当前只查询行锁，需在锁之后新增：
-
-~~~ts
-const existing = await tx.salesQuotation.findUniqueOrThrow({
-  where: { id },
-});
-await resolveSalesLinks(tx, data, existing);
-~~~
+本修订版报价 update() 已查询 existing 和明细，不要再次声明 existing。报价和合同均在原 existing 查询后插入一次 resolveSalesLinks；随后继续原计价差异判断与事务写入。
 
 create() 最后的 Prisma create 替换成事务包裹：
 
@@ -4292,3 +4630,68 @@ form-payload.ts：
 
 先确保已有功能保存正确、关联稳定和历史可解释，再增加新的业务流程。可以逐字执行的代码只对应本文已明确选择的规则；需要业务定义的扩展明确保留为后续事项，不用假设替代你的业务决定。
 
+
+
+## 附录 E. 2026-10-15 复核结论、修订理由与保留理由
+
+### E.1 复核依据与证据边界
+
+手册基准为 e898e1c7d1332b46226744b7c42a9640c2cb03c2。复核时远端 main 为 db2fcef74c360bb590e586bf60d1ebb432a865b5，两者间仅新增本手册，业务源码没有变化。
+
+[查看此次复核时的版本差异](https://github.com/wjmlovelife-bit/zhiBang/compare/e898e1c7d1332b46226744b7c42a9640c2cb03c2...db2fcef74c360bb590e586bf60d1ebb432a865b5)
+
+外部分析所说“本地没有新工具，所以不是手册基准版本”不成立：这些工具本来就要求新增。本地实际提交必须用提交号和差异判断，不能用尚未实施的新函数判断。
+
+外部分析声称“代码完整可编译、100% 可行”，缺少项目级编译及实际业务数据依据。此修订已按源码核对关键调用链，检查完整新增文件/方法片段语法，但没有把整个修改方案应用到业务项目完成编译，也没有执行数据库迁移；不把语法检查说成集成完成。
+
+### E.2 修改项与原因
+
+| 原手册问题 | 对应修订 | 修改原因 |
+| --- | --- | --- |
+| lines/discountValue 被提交就认定金额变更 | 4.1.1、4.3、4.4、4.7、4.8 | 前端整单回传时，说明编辑也会带旧明细；必须比较真实计价值 |
+| 历史单据可能隐式核算并重建明细 | 4.4、4.8、4.10 | 普通编辑保留原 ID 与金额；非草稿真实计价变化拒绝，不能通过存草稿解锁 |
+| 项目折数只校验范围 | 1.2 | Decimal(5,2) 只能保留两位小数，先计算再由数据库舍入会导致输入与结果不一致 |
+| 旧快照被当成正式提交，updatedAt 被当提交时间 | 8.1、8.4—8.6、8.9、8.11 | 普通保存也会有快照；必须使用 legacy_snapshot 和来源时间，不能制造历史动作 |
+| 付款计划合计被默认增加为合同提交门槛 | 0.1、4.7、4.8、12 | 这是业务规则选择，不是维持原流程的必选修复；默认关闭 |
+| 按章节线性顺序理解为可独立实施 | 0.2 | batchId、version、付款计划 ID 都有前后端协议依赖，需要成组完成 |
+| 相同 customerId 整单回传会刷新名称快照 | B.3、B.4 | 字段存在不等于客户变更，普通编辑不改写签约时名称 |
+| 项目 ID 仅解析局部变量、不一定写回 data | B.3 | 写入对象也必须规范化，且显式 null 同时清空编号 |
+| 客户无状态列，却允许按状态排序并默认显示正式 | 9.6、10.2、12 | 移除不存在字段的查询，缺失状态显示未定义；不凭空新增状态业务 |
+| 日程并发不一定先进入版本判断 | 8.5、8.6 | 可识别的事务冲突需要有限重试或明确冲突响应，不应掩盖其他错误 |
+| Int[] 引用检查被误解为完整外键保证 | 2.3、A | 检查与写入之间仍存在并发窗口；需要强保证时采用关系表及外键 |
+
+### E.3 保留项与不修改原因
+
+下列设计方向经过源码对照后保留，局部修订不等于推翻整套方案。
+
+| 保留项 | 不修改原因 |
+| --- | --- |
+| 客户联系人保留原 ID | 当前删完重建会改变 ID；修改电话不应使项目引用失效 |
+| 未传字段不修改、null 清空 | 对应 Prisma 的实际更新语义，能区分局部更新与主动清空 |
+| 按模型声明转换日期 | 原递归规则会把日期样式的普通文本改成时间字符串 |
+| 报价主表及明细事务原子性 | 原先先删明细再更新主表，后续失败会失去原明细；应优先修复 |
+| 最大跟进日期统一维护 | 插入顺序不等于业务日期顺序，修改和删除也要同步 |
+| 后端使用 Decimal 作为正式金额来源 | 减少前后端公式分叉；同时增加精度校验及历史兼容，而非取消统一计算 |
+| Excel 列、表头、合并范围修正 | 当前两份导出存在坐标不一致，属于可定位的功能问题 |
+| 批量分组统计 | 不需要逐人重复查询，明细和合计可以采用一致口径 |
+| 创建贡献与当前持有分开 | 转交客户改变持有人，不应改变原创建贡献 |
+| 历史创建人无可靠来源时保持未知 | 当前负责人可能已变更，强行回填会制造错误历史 |
+| 导入确认重新检查关联 | 预览之后客户和负责人可能变化，预览成功不是永久有效证明 |
+| 相同批次确认幂等 | 重复点击或重试不应重复创建同一批项目；不同批次重复另行识别 |
+| 原子编号序列、取消非原子回退 | 不能因序列异常退回到并发不可靠的查最后一条再加一 |
+| 分页校验及稳定次级排序 | 非法页码应明确报错，同值记录应有确定次序 |
+| 旧计价字段含义未确认时不猜测公式 | 字段名称不足以证明优惠、税费和金额的真实口径 |
+| 不直接把库存台账改成完整进销存 | 商品、仓库、到货、退货、负库存规则尚未明确 |
+| 不凭空补客户草稿状态 | 需要真实字段、状态转换和旧数据规则；本次只停止错误查询与错误标签 |
+
+### E.4 不能照搬的外部分析结论
+
+- 不采纳“100% 可行、完整可编译”的保证；保留具体源码证据和未验证边界。
+- 不以新增工具未存在作为版本不一致证据。
+- 当前 cleanDates 仍是空值转 undefined，不能认定已经与 nullableDate 对齐。
+- 不把历史 createdById 缺失解释成必须用 ownerId 回填。
+- 不整体推迟前端配套，也不降低报价事务修复的优先级。
+- 不把缺乏依据、内部不一致的工时估算写成实施承诺。
+- 用户此前排除的领域不因外部分析提及而自动加入本次修改范围。
+
+本次更新仅替换手册正文中的相关代码与说明，并记录上述修改/保留理由。业务规则尚未确认的扩展仍保持独立，不把假设当作已经验证的业务事实。
