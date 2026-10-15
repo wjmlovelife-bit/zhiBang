@@ -4,8 +4,9 @@
 > 对照版本：e898e1c7d1332b46226744b7c42a9640c2cb03c2  
 > 编写日期：2026-10-14；修订日期：2026-10-15  
 > 本文是修改建议与代码说明；本次修订只更新该 Markdown 文档，没有修改业务代码或数据库。
-> 修订版：依据源码及外部可行性分析复核，补充历史单据、旧快照、数值精度和前后端依赖的处理。
-> 业务代码基准仍为 e898e1c；复核时 main=db2fcef，其与基准的差异仅为新增本手册。
+> 风险核实版：本轮按“真实风险未排除则不实施；误读说明依据；修改方案写明已验证范围”的规则复核。
+> 文档中“保留方案”不表示已执行。第 0.0 节的暂缓状态优先于后续历史代码块，不能绕过状态直接复制执行。
+> 业务代码基准仍为 e898e1c；本轮更新前 main=0e4ae1452e60a1cf2686581499378e0a59e6f574，其与基准的差异仅为本手册的新增和修订，业务源码未变。
 > 不承诺“100% 可行”或“全部代码已项目级编译”。新增函数在旧源码中不存在，是实施前的正常状态，不能据此判断版本不一致。
 
 ## 0. 阅读与执行规则
@@ -16,7 +17,41 @@
 
 本文不包含安全、明文密码、Docker、CI、部署、日志、测试、公网、CDN、UI 审计、限流和 Redis 改造。表单修改仅为配合数据读写和业务动作。
 
-### 0.1 本版选择的业务规则
+
+### 0.0 本轮处理原则与执行状态（优先阅读）
+
+用户本轮要求：外部分析提出的风险和疑问要核实；真实存在、尚未排除的风险对应方案不实施；不成立的风险解释源码依据；保留的修改方案再次复核。
+
+这里的“不改”是**保持现有业务代码、数据库和历史记录不变**，不是继续保留文档中已确认错误的建议。无效的文档示例可以纠正，但这不等于允许执行其数据库迁移。
+
+暂缓一个拟议改法不会消除原实现已有的缺陷；文档会继续记录原问题，以及不采用该改法的原因，不能把“暂时不改”写成“现有实现已经没有风险”。
+
+还需区分：
+
+- **原实现有缺陷风险**：应评估修复方案，例如报价更新失败会丢失原明细。
+- **拟议改法有尚未排除的风险**：该改法暂缓，例如根据旧快照猜测正式提交状态。
+- **外部分析误读**：纠正其模型/字段理解，不为不存在的要求新增数据库字段。
+- **已验证的范围**：只承诺本轮实际检查的源码、Schema 和代码类型范围；不把部分通过扩大为整个系统没有问题。
+
+| 内容 | 本轮文档处理 | 业务实施状态 |
+| --- | --- | --- |
+| 报价原子事务的最小修复 | 保留；新增 0.4 独立版本，沿用原计价/清洗方法 | 最小修复候选，不捆绑新计价或新表 |
+| Excel 列与合并范围修复 | 保留第 5 节；解释坐标依据 | 纯导出候选，不依赖第 8 节新状态迁移 |
+| 项目折数两位小数约束 | 保留精度规则和差异示例 | 不允许数据库存储精度与计算输入不一致；不得顺带改历史金额 |
+| 第 1.3 节公共清洗替换 | 保留候选说明 | 影响多个调用者，需同组完成接口契约，不能孤立替换后声称全部兼容 |
+| 第 2 节删除联系人、附录 A 关系表迁移 | 记录真实并发引用风险 | 暂缓物理删除策略和数据迁移，不能把 Int[] 检查当完整外键保证 |
+| 第 3 节完整项目改造 | 保留局部合并和跟进派生字段方案，补充行锁边界 | 不承诺旧表单覆盖问题已解决；需要该保证时先完成版本协议 |
+| 第 4 节新计价及确认状态限制 | 保留候选，保护金额字段的范围写清 | 旧计价字段、历史状态未确认前暂缓；不将其作为 0.4 最小事务修复的前置条件 |
+| 第 6 节统计口径切换 | 保留批量分组技术方向 | 创建贡献/持有口径和历史空值未核对前，不直接替换用户正在使用的指标含义 |
+| 第 7、8、8.11 节模型和迁移 | 保留候选，修正 Schema 格式并重新验证 | 暂缓执行；未连接业务数据库，未确认旧周键、历史快照和实际迁移记录 |
+| 附录 B 客户/项目/单据关联迁移 | 保留关系设计及快照原则 | 暂缓；不能由名称猜测 ID，也不能在未梳理孤立引用前加约束 |
+| 提交时付款计划严格合计 | 保持默认 false | 不开启；它是新增业务门槛，不是缺陷修复的必选项 |
+| 新审批字段、批量历史状态/时间回填 | 删除其作为实施要求的可能性，列明不成立或有害原因 | 不新增、不回填、不猜测 |
+
+以上候选均没有在本轮应用到业务项目。只有对应真实风险的前提被核实后，才能从暂缓转为可实施；没有足够证据时，保持原业务行为，不用“看起来可以”代替确认。
+
+
+### 0.1 候选方案的业务假设（不能代替实施确认）
 
 | 事项 | 本文采用的规则 |
 | --- | --- |
@@ -42,9 +77,9 @@
 
 客户、项目、合同等全部业务流程尚未被完整定义。本手册不新增猜测的审批、收款或库存规则。
 
-### 0.2 按依赖成组实施
+### 0.2 解冻后按依赖成组实施
 
-章节号用于定位，不代表可以逐节独立完成。按以下功能组实施：
+本节只描述第 0.0 节条件满足、对应候选解冻后的依赖，不取消任何暂缓状态。章节号不代表可以逐节独立执行：
 
 | 功能组 | 同组必须完成的章节/调用链 |
 | --- | --- |
@@ -104,6 +139,47 @@
 - frontend/src/views/sales/contract/Form.vue
 - frontend/src/views/sales/sales-schedule/Index.vue
 - frontend/src/views/stats/sales/Index.vue
+
+
+### 0.4 报价事务的独立最小修复：不引入新计价与新模型
+
+适用基线：当前源码 QuotationService.update() 先单独删除明细，再执行主表及明细创建，两步不在同一事务。后一步失败时原明细不会恢复。
+
+这个最小版本**继续使用源码现有 sanitize 和 fixLine**，不采用第 4 节的新计算器，不增加新状态，不要求付款计划，不改变数据库结构。
+
+在 backend/src/modules/quotation/quotation.service.ts 只替换 update()：
+
+~~~ts
+async update(id: number, body: any, user: any) {
+  body = sanitize('SalesQuotation', body);
+  const { lines, ...rest } = body;
+  const data: any = { ...rest };
+  for (const key of ['createdBy', 'updatedBy']) delete data[key];
+
+  return this.prisma.$transaction(async (tx) => {
+    if (Array.isArray(lines)) {
+      await tx.salesQuotationLine.deleteMany({
+        where: { quotationId: id },
+      });
+      data.lines = {
+        create: lines.map((line: any) => this.fixLine(line)),
+      };
+    }
+    return tx.salesQuotation.update({
+      where: { id },
+      data,
+      include: { lines: true },
+    });
+  });
+}
+~~~
+
+为什么保留：数据库写入及现有值处理保持原样，仅把原来的删除和后续写入加入同一事务。新明细或主表写入失败时，删除也回滚。
+
+这个版本只修复原子性，不声称同时完成计价重构、字段白名单、并发旧表单保护或所有输入校验。它与第 4.4 节完整候选是两个阶段，不能在同一类中保留两个 update()。
+
+若以后已采用第 4.4 节完整方案，不要再用本段覆盖它；本段用于先处理已确定的明细丢失问题。
+
 
 ## 1. 公共工具：明确空值、日期和金额规则
 
@@ -600,6 +676,8 @@ rg -n 'normalizeDates' backend/src
 
 ## 2. 客户：创建人、空值与联系人稳定 ID
 
+> 执行状态：真实风险：Int[] 检查与项目写入间存在并发窗口。下述物理删除及关联迁移暂缓；保留 ID 的目标正确，不代表删除策略已获完整引用保证。
+
 ### 2.1 customer.service.ts 增加 import
 
 把 Nest import 中增加 BadRequestException。新增：
@@ -823,6 +901,8 @@ const payload: any = { ...form };
 
 ## 3. 项目：局部更新金额、客户关联与跟进日期
 
+> 执行状态：范围边界：行锁保证本事务的读写顺序，不识别用户页面是否陈旧。下述完整改造不能被解释成所有项目字段都不会被旧表单覆盖。
+
 ### 3.1 project.service.ts 增加 import
 
 ~~~ts
@@ -994,6 +1074,8 @@ private async resolveCustomer(
 有些草稿允许暂不关联客户，本方法保留此能力；确认状态必填规则可在 DTO/业务状态校验中继续执行。导入则要求客户编号存在。
 
 ### 3.5 新增项目行锁与最后跟进日期方法
+
+行锁不是项目页面的版本校验。例：A、B 都读取旧名称，A 改名保存；B 随后锁定行并回传整个旧表单，仍可能覆盖 A 的名称。本节解决事务内金额合并及跟进最大日期维护的顺序，不解决全部旧页面覆盖。需要后者时先定义项目 version 或明确的字段差异协议，且前后端一起完成；本轮不凭外部分析直接加字段。
 
 ~~~ts
 private async lockProject(
@@ -1254,14 +1336,15 @@ SET "lastFollowDate" = (
 schema.prisma 的 CrmProjectFollow 中增加：
 
 ~~~prisma
-@@index([projectId, followDate(sort: Desc)],
-  map: "CrmProjectFollow_projectId_followDate_idx")
+@@index([projectId, followDate(sort: Desc)], map: "CrmProjectFollow_projectId_followDate_idx")
 ~~~
 
 联系人旧失效 ID 不会通过重算跟进日期自动恢复。另行导出无法对应 CrmContact 的 ID，不根据姓名盲目回填。
 
 
 ## 4. 报价与合同：事务、后端核算、付款计划保留 ID
+
+> 执行状态：暂缓实施：本节是完整候选，不是本轮执行清单。旧计价字段、历史状态和财务流程未核实前，保持现有金额与状态；仅需原子事务时采用 0.4 独立最小修复。
 
 ### 4.1 两个 Service 的 import
 
@@ -1955,7 +2038,9 @@ const payload = buildFormPayload('quotation', form);
 const payload = buildFormPayload('contract', form);
 ~~~
 
-第 10 节给出完整公共构建函数。保留前端 recalc 做即时预览；后端保存结果为正式值，不把 row.amount 当作最终计算依据。
+第 10 节给出完整公共构建函数。前端 recalc 仍使用 Number/parseFloat/Math.round，只是预览；没有因此证明前后端每次都不会出现 0.01 差异。正式结果以后端为准。若业务要求预览也完全一致，应另行统一前端十进制计算，不在本轮假定已完成。
+
+历史保护仅覆盖明确的计价、币种、状态、明细金额及 ID 等字段；说明、备注等允许编辑的内容仍可修改，不能称为整张单据完全不可更改。
 
 ## 5. Excel：直接替换两个导出方法
 
@@ -2120,6 +2205,8 @@ async exportToBuffer(ownerId: number, weekStart: Date): Promise<Buffer> {
 **为什么：** 顶部合并区域正文位于左上角；当日总结合并 D 列；上午与下午分别合并 C 列，不再丢失下午标识。
 
 ## 6. 销售统计：创建贡献、当前持有与批量聚合
+
+> 执行状态：暂缓口径切换：按创建人计贡献、按负责人计持有量是候选定义。技术分组方向可保留，但不可未经确认改变现有指标含义或猜填历史创建人。
 
 ### 6.1 stats.service.ts 新增 import
 
@@ -2345,6 +2432,8 @@ UPDATE "CrmCustomer" SET "createdById" = "ownerId";
 
 
 ## 7. 项目导入：预览解析、整批事务和批次幂等
+
+> 执行状态：暂缓实施：本节引入新表和请求协议。候选 Schema 可作形式验证，不等于目标数据库历史和所有调用者已经兼容。
 
 ### 7.1 schema.prisma 新增 ProjectImportBatch
 
@@ -2761,6 +2850,8 @@ async function confirmImport() {
 
 ## 8. 销售日程：保存与提交分开，旧版本保留
 
+> 执行状态：暂缓实施：真实历史提交行为、周键和旧快照尚未核实，不能执行状态迁移。代码保留为候选，读取原则仍是保留旧事实，不创造提交时间。
+
 ### 8.1 schema.prisma 修改 CrmSalesSchedule
 
 保留现有字段，新增：
@@ -2790,11 +2881,7 @@ model CrmSalesScheduleRevision {
   sourceUpdatedAt DateTime?
   recordedAt    DateTime @default(now())
 
-  schedule CrmSalesSchedule @relation(
-    fields: [scheduleId],
-    references: [id],
-    onDelete: Cascade
-  )
+  schedule CrmSalesSchedule @relation( fields: [scheduleId], references: [id], onDelete: Cascade )
 
   @@unique([scheduleId, revision])
 }
@@ -3340,6 +3427,8 @@ for (const field of [
 ~~~
 
 ## 8.11 统一数据库变更文件
+
+> 执行状态：暂缓执行：本节 SQL 仅为首次实施时的候选，不是当前数据库的已批准迁移。没有查询实际迁移记录、旧周键与历史数据，不运行任何 DDL/DML。
 
 新增：
 backend/prisma/migrations/202610140001_business_consistency/migration.sql
@@ -4123,7 +4212,9 @@ fmtLocalDate 无调用后删除，不再混用浏览器本地时区。
 
 ## 12. 实施前的编译与数据边界说明
 
-这份手册的代码依据固定版本源码核对。文档编写环境没有项目依赖和真实业务数据库，因此没有声称全部片段已在你的数据库完成编译和执行。
+按第 0.0 节真实风险条件未满足的候选保持暂缓。本章列出的命令只是在未来对应功能组具备前提后可执行的开发检查，不是本轮要求你运行数据库迁移或应用所有代码。
+
+这份手册的代码依据固定版本源码核对。本轮已安装锁定版本依赖，在隔离目录完成附录 F.3 所列结构和类型检查；没有连接真实业务数据库，也没有完成整套方案的应用集成。下列命令是后续实施检查，不是本轮已执行结果。
 
 在你按本文完成修改后，应重新生成 Prisma Client，并执行项目现有编译命令：
 
@@ -4150,13 +4241,15 @@ npm run build
 3. 历史联系人 ID 已丢失的数据不能通过本文自动复原。
 4. 本文没有自动重算已确认历史金额。
 5. 旧创建人缺失保持未知，不能用当前负责人猜测。
-6. 第 4 节付款计划严格合计规则默认关闭；只有明确采用后才能开启，不能作为无业务变化的必选修复。
+6. 第 4 节完整财务候选仍暂缓；其中付款计划严格合计规则默认关闭，不能为“消除风险”而先改变现有提交门槛。
 7. 旧 pricejy、concessions、moneyAfterConcessions 等字段仍保留兼容数据；没有确认含义前不将它们加入新的金额公式。
 8. 第 7、8 节模型变更、客户端生成与调用代码必须同时完成，不能只粘贴 Service。
 9. 本次客户状态未被重新定义；第 9.6 节停止不存在字段的排序，并把缺失状态标为未定义，不把它默认显示为正式。
 
 
 ## 附录 A. 第二阶段：项目联系人关系表
+
+> 执行状态：暂缓迁移：关系表和外键可以解决数组缺乏约束的问题，但现有失效引用、数据整理结果尚未确认。不能未检查数据就执行 SQL。
 
 本附录在第一阶段完成后实施。第一阶段已保留联系人 ID，本附录进一步通过外键保证引用存在。
 
@@ -4168,12 +4261,8 @@ model CrmProjectContact {
   contactId Int
   sort      Int @default(0)
 
-  project CrmOpportunity @relation(
-    fields: [projectId], references: [id], onDelete: Cascade
-  )
-  contact CrmContact @relation(
-    fields: [contactId], references: [id], onDelete: Restrict
-  )
+  project CrmOpportunity @relation( fields: [projectId], references: [id], onDelete: Cascade )
+  contact CrmContact @relation( fields: [contactId], references: [id], onDelete: Restrict )
 
   @@id([projectId, contactId])
   @@index([contactId])
@@ -4320,6 +4409,8 @@ if (linked) {
 
 ## 附录 B. 第二阶段：客户、项目、报价、合同关系
 
+> 执行状态：暂缓迁移：新增关系不能靠名称猜测。先核对现有编号/ID和孤立引用；本轮不改任何已保存单据的客户、项目或名称快照。
+
 这里给出可独立加入的数据结构和关联解析工具。第一阶段金额代码不依赖这些新增外键，所以不需要一边改金额一边改变所有表单。
 
 ### B.1 schema.prisma
@@ -4342,14 +4433,8 @@ SalesQuotation 增加：
 
 ~~~prisma
 customerId Int?
-customer CrmCustomer? @relation(
-  "QuotationCustomer",
-  fields: [customerId], references: [id], onDelete: Restrict
-)
-opportunity CrmOpportunity? @relation(
-  "QuotationProject",
-  fields: [opportunityId], references: [id], onDelete: Restrict
-)
+customer CrmCustomer? @relation( "QuotationCustomer", fields: [customerId], references: [id], onDelete: Restrict )
+opportunity CrmOpportunity? @relation( "QuotationProject", fields: [opportunityId], references: [id], onDelete: Restrict )
 contracts SalesContract[] @relation("ContractQuotation")
 
 @@index([customerId])
@@ -4363,18 +4448,9 @@ SalesContract 增加：
 ~~~prisma
 customerId Int?
 opportunityId Int?
-customer CrmCustomer? @relation(
-  "ContractCustomer",
-  fields: [customerId], references: [id], onDelete: Restrict
-)
-sourceProject CrmOpportunity? @relation(
-  "ContractSourceProject",
-  fields: [opportunityId], references: [id], onDelete: Restrict
-)
-quotation SalesQuotation? @relation(
-  "ContractQuotation",
-  fields: [quotationId], references: [id], onDelete: Restrict
-)
+customer CrmCustomer? @relation( "ContractCustomer", fields: [customerId], references: [id], onDelete: Restrict )
+sourceProject CrmOpportunity? @relation( "ContractSourceProject", fields: [opportunityId], references: [id], onDelete: Restrict )
+quotation SalesQuotation? @relation( "ContractQuotation", fields: [quotationId], references: [id], onDelete: Restrict )
 
 @@index([customerId])
 @@index([opportunityId])
@@ -4628,11 +4704,13 @@ form-payload.ts：
 
 ### 本文最终原则
 
-先确保已有功能保存正确、关联稳定和历史可解释，再增加新的业务流程。可以逐字执行的代码只对应本文已明确选择的规则；需要业务定义的扩展明确保留为后续事项，不用假设替代你的业务决定。
+先确保已有功能保存正确、关联稳定和历史可解释，再增加新的业务流程。本文代码均为候选方案，必须先查第 0.0 节状态；暂缓章节不能直接复制执行。已给出具体代码，不代表历史数据和业务前提已经得到确认。
 
 
 
-## 附录 E. 2026-10-15 复核结论、修订理由与保留理由
+## 附录 E. 2026-10-15 首次复核记录、修订理由与保留理由
+
+本附录保留上次修订的依据与结论；其中“本次”指上次修订。当前执行状态以第 0.0 节及附录 F 为准。
 
 ### E.1 复核依据与证据边界
 
@@ -4695,3 +4773,74 @@ form-payload.ts：
 - 用户此前排除的领域不因外部分析提及而自动加入本次修改范围。
 
 本次更新仅替换手册正文中的相关代码与说明，并记录上述修改/保留理由。业务规则尚未确认的扩展仍保持独立，不把假设当作已经验证的业务事实。
+
+
+## 附录 F. 第二次外部分析的逐项风险判定与本轮复核
+
+### F.1 字段疑问：按模型核实，不按名称猜测
+
+源码依据为业务基准 e898e1c 及复核时远端同内容的业务文件。引用位置：
+
+- [SalesQuotation.approvalState](https://github.com/wjmlovelife-bit/zhiBang/blob/e898e1c7d1332b46226744b7c42a9640c2cb03c2/backend/prisma/schema.prisma#L494)
+- [SalesContract.approvalState](https://github.com/wjmlovelife-bit/zhiBang/blob/e898e1c7d1332b46226744b7c42a9640c2cb03c2/backend/prisma/schema.prisma#L566)
+- [CrmOpportunity.submitStatus](https://github.com/wjmlovelife-bit/zhiBang/blob/e898e1c7d1332b46226744b7c42a9640c2cb03c2/backend/prisma/schema.prisma#L366)
+- [现有两类日程模型](https://github.com/wjmlovelife-bit/zhiBang/blob/e898e1c7d1332b46226744b7c42a9640c2cb03c2/backend/prisma/schema.prisma#L748)
+
+| 外部风险/疑问 | 是否成立 | 本轮决定及原因 |
+| --- | --- | --- |
+| 报价、合同缺少 approvalState | 不成立 | 两张模型已有该字段，不新增也不迁移它 |
+| 手册要求项目新增 approvalState/submittedAt | 不成立 | 项目使用已有 submitStatus=draft/active，手册没有该新增要求 |
+| 手册要求非销售周日程新增 version/submittedAt | 不成立 | 本轮未提出这些字段，不因分析中的混淆扩大结构变更 |
+| CrmProjectImportBatch 缺失 | 名称误读，但新表引入确有影响 | 候选实际名称 ProjectImportBatch；有新表/协议风险，所以该功能暂缓 |
+| 项目表缺 batchId | 不成立 | batchId 是接口标识，映射新批次表 id，不要求给项目逐条加字段 |
+| 所有 Form 都应新增 persistedApprovalState | 不成立 | 它是报价/合同前端变量，不是数据库字段，也不是所有日程页面要求 |
+| 需要 approvedAt 等新时间字段 | 不成立 | 当前候选未要求该字段，不为一个泛称自行新增 |
+| 应把全部旧合同设为 submitted | 有真实错误风险 | 不执行；混淆报价/合同与日程的状态域，也没有历史确认依据 |
+| 用 updatedAt 回填真实 submittedAt | 有真实错误风险 | 不执行；更新时间不能证明提交时间，未知仍保持未知 |
+| 所有结构增加都属于破坏性删除/重建 | 说法过度 | 新增不等于删除，但数据迁移与兼容风险确实未排除，因此第 7/8/A/B 迁移仍暂缓 |
+| 行锁可以杜绝全部项目丢更新 | 不成立；陈旧表单覆盖风险真实 | 只确认事务顺序，不扩大保证；需要完整防覆盖时暂缓整表单方案，先完成版本协议 |
+| Decimal 后前后端绝无一分钱差异 | 不成立 | 后端正式值与前端 Number 预览是两套路径，不在本轮声称预览已完全统一 |
+| 付款计划/历史单据“完全不能修改” | 不成立 | 保护的是明确字段，说明、备注等仍可按规则修改 |
+| 联系人 Int[] 并发引用可能漏检查 | 成立 | 删除策略及关系迁移暂缓；不能仅靠先查询再写入宣称完整约束 |
+| 项目 8.123 折可直接计算并存储 | 有真实精度风险 | 不允许继续采用不匹配输入；保留两位小数约束，不改写历史金额 |
+| 非零旧计价字段可直接套新公式 | 有真实业务口径风险 | 不重新核算；旧字段含义未确认时保持现状 |
+| 可以保证完整方案已可编译、无任何问题 | 不成立 | 仅报告实际验证项目；未完成的集成、数据和业务前提不冒充通过 |
+| 工时可据字段数量固定为若干小时 | 证据不足 | 不采用该承诺；分析自身的分项、合计和版本划分也不一致 |
+
+### F.2 真正提出的新问题：Prisma 示例格式
+
+本轮使用项目锁定版本 Prisma 5.22.0 对隔离候选 Schema 进行验证，旧文档中的多行 @relation(...) 被拒绝，报 P1012。
+
+处理：撤回无效文档写法，将 Prisma 属性参数写在同一行，再验证候选结构。没有为了修复文档语法去改业务数据库。
+
+此前 TypeScript 代码片段语法检查没有覆盖 Prisma DSL，这是实际验证范围的缺口；本轮明确记录，不继续重复“全部可编译”结论。
+
+### F.3 复核结果与未覆盖范围
+
+本轮只更新文档，在隔离目录组装候选代码，没有把方案应用到业务仓库。实际完成的检查如下：
+
+| 检查对象 | 方法与结果 | 结论边界 |
+| --- | --- | --- |
+| 业务源码是否已变化 | 比较 e898e1c 与更新前 main=0e4ae145；差异仅有本手册 | 本轮仍可用 e898e1c 作业务源码依据 |
+| 现有模型及字段疑问 | 对照原 schema.prisma、报价/合同表单及服务调用 | F.1 中不成立的字段缺失结论不作为新增字段理由 |
+| Prisma 示例语法 | 修正 9 处跨行属性声明，包括 @relation 和 @@index | 这是文档代码的确定错误，已修正；不涉及业务数据写入 |
+| 第一阶段候选 Schema | 用 Prisma 5.22.0 官方 @prisma/internals 的 getDMMF（WASM）解析和校验，40 个模型通过 | 确认结构能被该版本接受，不证明迁移 SQL 或历史数据安全 |
+| 加入附录 A/B 的第二阶段候选 Schema | 同版本 getDMMF 校验，41 个模型通过 | 关系声明通过结构校验，不能据此断言存量引用都满足外键 |
+| 完整公共工具、DTO、前端工具文件 | 按项目锁定的 TypeScript 5.9.3、Prisma 5.22.0 等依赖，在隔离目录进行 noEmit 类型检查，通过 | 覆盖 business-values、money、number-code、payload 候选变更、pagination/import DTO、business-date、form-payload；不是所有 Vue 页面编译 |
+| 第 0.4 节报价最小事务修复 | 连同现有 sanitize、原 fixLine 及真实 Prisma 类型进行隔离类型检查，通过 | 证明此代码在该类型上下文下成立；事务回滚结论依据数据库事务语义，没有连接业务数据库验证运行结果 |
+| 报价/合同、联系人、项目、日程、Excel、统计候选方法 | 将文档完整方法组装为类，使用候选 Schema 生成的 Prisma 类型；第一、二阶段上下文类型检查均通过 | 仅覆盖组装的方法与所列依赖，不能替代整个 Nest/Vue 项目的集成编译 |
+| 附录 B 关联工具 | 连同第二阶段 Prisma 类型检查，通过 | 名称到历史 ID 的实际映射、历史孤立数据及迁移仍未核实 |
+
+类型检查的具体限制：项目 buildData 与销售日程 buildDaysArray 在方法组装中只提供了依赖类型声明，没有完整集成其实现；控制器、所有表单提交链路、Vue 单文件组件和完整应用构建没有一并验证。原项目 tsconfig 中 strictNullChecks/noImplicitAny 为 false，本轮沿用配置，并未获得更严格的静态保证。部分代码仍使用 any，类型检查无法证明运行时输入符合规则。
+
+Prisma 结构检查使用官方 WASM 路径完成，没有把下载失败的原生引擎 CLI 检查算作通过；未运行 prisma migrate、db push、回填 SQL，也没有连接业务数据库。Schema 校验通过不包含迁移历史、约束冲突、并发执行、真实历史金额、旧周键和快照语义的验证。
+
+因此，**可以确认的是：已识别的字段误读有源码依据；错误的 Prisma 文档格式已纠正；上述候选结构和隔离类型上下文检查通过。不能确认的是：整套改造集成后在实际业务与历史数据上均无问题。** 未覆盖的业务前提继续触发第 0.0 节暂缓状态，不以检查通过替代它们。
+
+### F.4 本轮最终决定
+
+1. 外部分析误读的模型和字段不新增，错误的批量状态/时间回填不执行，并写明源码依据。
+2. 真实风险尚未排除的功能保持暂缓，不修改现有业务代码、数据库和历史记录。
+3. 可独立保留的最小修复不捆绑新业务规则；例如 0.4 仅给报价原删除/写入增加事务。
+4. 候选文档本身的确定错误予以纠正；修正 Schema 语法不等于批准迁移。
+5. 不承诺任何软件修改“绝对零风险”。只有已验证范围可作肯定结论，未验证部分继续保持不实施。
